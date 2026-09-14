@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/icon/wisp-icon-1024.png" alt="Wisp icon" width="128" height="128">
+</p>
+
 # Wisp
 
 Wisp is a computer-use toolkit for macOS: a daemon (`wispd`) that reads app windows as an indexed accessibility
