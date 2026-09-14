@@ -2,11 +2,13 @@
   <img src="assets/icon/wisp-icon-1024.png" alt="Wisp icon" width="128" height="128">
 </p>
 
-# Wisp
+<h1 align="center">Wisp</h1>
 
-Wisp is a computer-use toolkit for macOS: a daemon (`wispd`) that reads app windows as an indexed accessibility
-tree and performs UI actions with an animated agent cursor, plus a CLI (`wisp`) and an MCP server (`wisp mcp`)
-that any agent (Claude Code, Codex, scripts) can call. Chrome tabs can also be driven over the DevTools Protocol.
+<p align="center">
+  Wisp is a computer-use toolkit for macOS: a daemon (<code>wispd</code>) that reads app windows as an indexed accessibility
+  tree and performs UI actions with an animated agent cursor, plus a CLI (<code>wisp</code>) and an MCP server (<code>wisp mcp</code>)
+  that any agent (Claude Code, Codex, scripts) can call. Chrome tabs can also be driven over the DevTools Protocol.
+</p>
 
 It is a from-scratch implementation of the ideas documented in [DESIGN.md](DESIGN.md) (how the ChatGPT/Codex
 desktop app's Computer Use works): indexed AX trees with diffs, window-targeted synthesized input that does not
