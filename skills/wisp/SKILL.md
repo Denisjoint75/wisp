@@ -8,6 +8,26 @@ description: Control macOS apps and Chrome tabs with the `wisp` CLI (accessibili
 `wisp` is a CLI (and MCP server) that reads an app window as an indexed accessibility tree and performs UI actions.
 Every action returns the new state as a diff, so you rarely need a separate read.
 
+## Requirement: the `wisp` command
+
+This skill needs the `wisp` command-line tool (and its `Wisp.app` daemon) installed on the machine. Before the
+first action, confirm it is present:
+
+```bash
+command -v wisp >/dev/null && wisp doctor
+```
+
+If `wisp` is not found, do not try to work around it — tell the user it is missing and how to install it, then stop
+until it is installed:
+
+```bash
+brew install --cask owo-network/brew/wisp
+```
+
+(That is the Homebrew cask; it installs `Wisp.app` and the `wisp` CLI together.) After installing, the user opens
+`Wisp.app` once and grants Accessibility (and Screen Recording for screenshots) when the menu bar prompts; `wisp
+doctor` shows what is still missing. Only continue once `wisp doctor` reports Accessibility granted.
+
 ## Workflow
 
 1. Pick the target: `--app <name|bundle id|path>` for native apps (launched automatically), or `--tab <id>` for a

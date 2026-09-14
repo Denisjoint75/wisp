@@ -17,16 +17,51 @@ and a policy file.
 
 ## Install
 
+### Homebrew (recommended)
+
+```bash
+brew install --cask owo-network/brew/wisp
+```
+
+This installs `Wisp.app` and the `wisp` command-line tool together (both signed and notarized). Updates arrive
+automatically through Sparkle. Then open the app once and grant permissions:
+
+```bash
+open -a Wisp        # menu bar app; guides you through permissions on first run
+wisp doctor         # shows what is still missing
+```
+
+Grant **Accessibility** (required) and **Screen Recording** (optional, for screenshots) to *Wisp* in
+System Settings → Privacy & Security. The menu bar item guides you: it asks for Accessibility with the system
+prompt, shows a hint banner, and offers "Grant Accessibility access…" and "Grant Screen Recording…" items that
+open the right Settings pane. Once every permission is granted the badge disappears.
+
+### Use with Claude Code
+
+Wisp ships a skill and an MCP server so an agent can drive the UI for you.
+
+- **Skill** — copy the skill into Claude Code so it knows how and when to use `wisp`:
+
+  ```bash
+  git clone --depth 1 https://github.com/missuo/wisp /tmp/wisp && \
+    mkdir -p ~/.claude/skills && cp -R /tmp/wisp/skills/wisp ~/.claude/skills/wisp
+  ```
+
+  (From a source checkout you already have: `cp -R skills/wisp ~/.claude/skills/wisp`.) The skill checks that `wisp`
+  is installed and tells you how to install it if not.
+
+- **MCP server** — expose the same operations as tools:
+
+  ```bash
+  claude mcp add wisp -- wisp mcp
+  ```
+
+### From source
+
 ```bash
 scripts/bundle.sh            # builds release binaries, packages Wisp.app and installs ~/.local/bin/wisp
 wisp doctor --request-permissions
 ```
-
-Grant **Accessibility** (required) and **Screen Recording** (for screenshots) to *Wisp* in
-System Settings → Privacy & Security. The daemon guides you through this on first run: it asks for Accessibility
-with the system prompt, shows a hint banner, and puts a badge on its menu bar icon with "Grant Accessibility access…"
-and "Grant Screen Recording…" items that open the right Settings pane. Once every permission is granted the badge and
-the items disappear. Screen Recording is also requested the first time a screenshot is attempted.
 
 During development you can run straight from the build tree:
 `WISP_DAEMON=.build/debug/wispd .build/debug/wisp doctor` (a terminal that already has Accessibility permission

@@ -38,7 +38,10 @@ APP="$OUT/Wisp.app"
 rm -rf "$OUT"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks"
 cp "$PRODUCTS/wispd" "$APP/Contents/MacOS/wispd"
+# Ship the CLI both standalone (for the cli zip) and inside the bundle next to wispd, so a Homebrew cask can link
+# `wisp` from the app and the CLI finds the daemon in the same directory.
 cp "$PRODUCTS/wisp" "$OUT/wisp"
+cp "$PRODUCTS/wisp" "$APP/Contents/MacOS/wisp"
 echo "architectures: $(lipo -archs "$APP/Contents/MacOS/wispd")"
 
 # Sparkle.framework from the SwiftPM binary artifact
@@ -106,6 +109,7 @@ for xpc in "$FW"/XPCServices/*.xpc; do "${SIGN[@]}" --preserve-metadata=entitlem
 "${SIGN[@]}" "$FW/Updater.app"
 "${SIGN[@]}" "$APP/Contents/Frameworks/Sparkle.framework"
 "${SIGN[@]}" --identifier sb.moe.wisp "$APP/Contents/MacOS/wispd"
+"${SIGN[@]}" --identifier sb.moe.wisp.cli "$APP/Contents/MacOS/wisp"
 "${SIGN[@]}" --identifier sb.moe.wisp "$APP"
 "${SIGN[@]}" --identifier sb.moe.wisp.cli "$OUT/wisp"
 codesign --verify --deep --strict "$APP"
