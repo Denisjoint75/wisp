@@ -83,7 +83,6 @@ jobs:
           hdiutil create -volname "Wisp" -srcfolder dist/Wisp.app -ov -format UDZO "dist/Wisp-$VERSION.dmg"
           codesign --force --sign "$SIGN_IDENTITY" --timestamp "dist/Wisp-$VERSION.dmg"
           (cd dist && zip -q "wisp-cli-$VERSION.zip" wisp)
-          shasum -a 256 "dist/appcast/Wisp-$VERSION.zip" "dist/Wisp-$VERSION.dmg" "dist/wisp-cli-$VERSION.zip" > dist/SHA256SUMS.txt
 
       - name: Notarize DMG
         env:
@@ -93,6 +92,9 @@ jobs:
         run: |
           xcrun notarytool submit "dist/Wisp-$VERSION.dmg" --apple-id "$NOTARY_APPLE_ID" --team-id "$NOTARY_TEAM_ID" --password "$NOTARY_PASSWORD" --wait
           xcrun stapler staple "dist/Wisp-$VERSION.dmg"
+          # Checksums are taken after stapling, which rewrites the DMG; names are bare so `shasum -c` works from the download folder.
+          (cd dist/appcast && shasum -a 256 "Wisp-$VERSION.zip") > dist/SHA256SUMS.txt
+          (cd dist && shasum -a 256 "Wisp-$VERSION.dmg" "wisp-cli-$VERSION.zip") >> dist/SHA256SUMS.txt
 
       - name: Generate Sparkle appcast
         env:
