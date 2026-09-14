@@ -56,6 +56,19 @@ Wisp ships a skill and an MCP server so an agent can drive the UI for you.
   claude mcp add wisp -- wisp mcp
   ```
 
+- **Stop hook**: end the Wisp session (cursor, banner, scratch Chrome tabs) whenever Claude Code finishes a turn,
+  even if the agent forgot to run `wisp end`. Add to `~/.claude/settings.json`:
+
+  ```json
+  {
+    "hooks": {
+      "Stop": [
+        { "hooks": [ { "type": "command", "command": "wisp end" } ] }
+      ]
+    }
+  }
+  ```
+
 ### From source
 
 ```bash
@@ -131,6 +144,16 @@ Your existing Chrome windows can be controlled through accessibility instead: `w
   into unless allowed, screen-lock check, display kept awake while a session runs.
 - **Chrome:** `Accessibility.getFullAXTree` + `DOMSnapshot.captureSnapshot` rendered by the same engine;
   `Input.dispatch*` for actions; `Page.captureScreenshot`; `Runtime.evaluate` for `wisp chrome eval`.
+
+### Safety and confirmations
+
+The daemon enforces the mechanical guardrails (policy file, Esc, intervention detection, secure fields, screen
+lock), but deciding *whether* an action should happen is up to the agent. The skill therefore ships a confirmation
+policy in four tiers: actions the agent must hand back to the user (submitting credential changes, bypassing
+security walls, entering passwords), actions it must confirm right before the effect (deleting, sending, paying,
+changing settings or permissions), actions covered by an explicit request (a login or upload the user named), and
+everything else, which needs no confirmation. See
+[skills/wisp/references/confirmations.md](skills/wisp/references/confirmations.md).
 
 ## Releases and updates
 
