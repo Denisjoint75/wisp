@@ -156,3 +156,9 @@ assets/            app icon sources and the Sparkle public key
 ```
 
 `swift test` runs the core unit tests; `scripts/e2e.sh` exercises the daemon against TextEdit.
+
+## License
+
+Wisp is licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE.md): free to use for any noncommercial
+purpose. See the license for the definition of noncommercial and for personal-use and noncommercial-organization
+terms. For a commercial license, contact the maintainer.
