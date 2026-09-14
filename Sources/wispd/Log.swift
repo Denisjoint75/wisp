@@ -3,7 +3,7 @@ import os
 import WispCore
 
 enum Log {
-    static let logger = Logger(subsystem: "dev.wisp.daemon", category: "wispd")
+    static let logger = Logger(subsystem: "sb.moe.wisp", category: "wispd")
     private static let queue = DispatchQueue(label: "wisp.log")
     private static let formatter: DateFormatter = {
         let f = DateFormatter()

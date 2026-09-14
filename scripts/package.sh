@@ -50,7 +50,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-  <key>CFBundleIdentifier</key><string>dev.wisp.daemon</string>
+  <key>CFBundleIdentifier</key><string>sb.moe.wisp</string>
   <key>CFBundleName</key><string>Wisp</string>
   <key>CFBundleDisplayName</key><string>Wisp</string>
   <key>CFBundleExecutable</key><string>wispd</string>
@@ -105,8 +105,8 @@ for xpc in "$FW"/XPCServices/*.xpc; do "${SIGN[@]}" --preserve-metadata=entitlem
 "${SIGN[@]}" "$FW/Autoupdate"
 "${SIGN[@]}" "$FW/Updater.app"
 "${SIGN[@]}" "$APP/Contents/Frameworks/Sparkle.framework"
-"${SIGN[@]}" --identifier dev.wisp.daemon "$APP/Contents/MacOS/wispd"
-"${SIGN[@]}" --identifier dev.wisp.daemon "$APP"
-"${SIGN[@]}" --identifier dev.wisp.cli "$OUT/wisp"
+"${SIGN[@]}" --identifier sb.moe.wisp "$APP/Contents/MacOS/wispd"
+"${SIGN[@]}" --identifier sb.moe.wisp "$APP"
+"${SIGN[@]}" --identifier sb.moe.wisp.cli "$OUT/wisp"
 codesign --verify --deep --strict "$APP"
 echo "packaged $APP and $OUT/wisp (signed with: $IDENTITY)"
