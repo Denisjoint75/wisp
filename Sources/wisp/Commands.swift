@@ -92,6 +92,8 @@ enum Commands {
     static func run(_ argv: [String]) -> Int32 {
         let a = Args(argv)
         let out = Output(json: a.flag("json", "j"))
+        // `--version` / `-v` and `--help` / `-h` work as bare flags, not just as subcommands.
+        if a.flag("version", "v") { print("wisp \(WispVersion.string) (\(WispVersion.build))"); return 0 }
         let cmd = a.positional.first ?? "help"
         if let sock = a.value("socket") { setenv("WISP_SOCKET", sock, 1) }
         do {
