@@ -3,6 +3,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 PREFIX="${PREFIX:-$HOME/.local}"
+# package.sh regenerates and lints the app instructions before building; lint errors abort the install.
 scripts/package.sh --output dist
 mkdir -p "$PREFIX/bin"
 rm -rf "$PREFIX/bin/Wisp.app"

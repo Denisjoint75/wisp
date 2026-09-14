@@ -46,6 +46,16 @@ actor Daemon {
     private var interventionAt: Date?
     private var lastInterventionType: String?
     private var busy = false
+    private var catalogCache: InstructionCatalog?
+
+    /// Per-app instruction catalog (built-in texts plus `~/.config/wisp/instructions`), built on first use and again
+    /// whenever the policy changes so `instructionsMode` is picked up.
+    private var catalog: InstructionCatalog {
+        if let c = catalogCache { return c }
+        let c = InstructionCatalog(userDir: WispPaths.instructionsDir, mode: InstructionCatalog.Mode(rawValue: policy.instructionsMode) ?? .merge)
+        catalogCache = c
+        return c
+    }
 
     private init() {
         chrome = ChromeBackend(port: Policy.load().chromePort)
@@ -185,6 +195,15 @@ actor Daemon {
             }
             if finalState.isNull, params["observe"].bool ?? true { finalState = try await captureState(target, options: opts) }
             return ["result": ["ok": true, "steps": .array(results), "state": finalState]]
+        case Proto.Method.appInstructions:
+            let spec = try TargetSpec.parse(params)
+            guard case .app(let name, _) = spec else { throw WispError(.invalidParams, "instructions needs an app") }
+            let info = try appInfoForInstructions(name)
+            let candidates = instructionCandidates(for: info)
+            let c = catalog.compose(candidates: candidates, isBrowser: info.isBrowser)
+            return ["result": ["app": info.json, "candidates": .array(candidates.map { .string($0) }),
+                               "matched": .array(c.pieces.map { $0.json }), "text": c.text.map { .string($0) } ?? .null,
+                               "isBrowser": .bool(info.isBrowser), "mode": .string(catalog.mode.rawValue)]]
         case Proto.Method.sessionCancel:
             cancelNow(reason: .cancelled, message: "cancelled by client")
             return ["result": ["ok": true]]
@@ -208,6 +227,7 @@ actor Daemon {
         case Proto.Method.policySet:
             policy = Policy.from(json: params)
             try policy.save()
+            catalogCache = nil
             chrome.port = policy.chromePort
             let p = policy
             await MainActor.run {
@@ -424,9 +444,14 @@ actor Daemon {
         root = TreeTransform.apply(root, options: tOpts)
         let title = w.title ?? root.name ?? ""
         let header = "# \(s.displayName) — \"\(title)\" (window \(w.id.map { String($0) } ?? "?"), \(Int(w.frame.width))x\(Int(w.frame.height)) at \(Int(w.frame.origin.x)),\(Int(w.frame.origin.y)); pid \(s.pid))"
+        var instructions: String? = nil
+        if options.instructions ?? !s.instructionsShown {
+            instructions = catalog.compose(candidates: instructionCandidates(for: s.info), isBrowser: s.info.isBrowser).text
+            s.instructionsShown = true
+        }
         return try await finishState(root: root, header: header, revisions: s.revisions, options: options, settled: settled,
                                      targetJSON: ["kind": "app", "app": s.info.json, "window": w.json],
-                                     instructions: instructionsIfFirst(session: s), screenshot: {
+                                     instructions: instructions, screenshot: {
                                          guard let id = w.id else { throw WispError(.windowNotFound, "window has no CGWindow id (not on screen?)") }
                                          let shot = try await ScreenshotService.captureWindow(id: id, frame: w.frame)
                                          s.lastScreenshot = shot
@@ -460,7 +485,11 @@ actor Daemon {
         let root = TreeTransform.apply(snap.root, options: tOpts)
         let header = "# Chrome tab \(t.id.prefix(8)) — \"\(snap.title)\" \(snap.url) (viewport \(Int(snap.viewport.width))x\(Int(snap.viewport.height)))"
         var instructions: String? = nil
-        if !t.instructionsShown { t.instructionsShown = true; instructions = loadInstructions(keys: ["chrome-tab", "com.google.Chrome"]) }
+        if options.instructions ?? !t.instructionsShown {
+            // A DevTools tab is a browser surface: the `_browser` block comes first, then the tab-specific text.
+            instructions = catalog.compose(candidates: ["chrome-tab"], isBrowser: true).text
+            t.instructionsShown = true
+        }
         return try await finishState(root: root, header: header, revisions: t.revisions, options: options, settled: settled,
                                      targetJSON: ["kind": "tab", "tab": t.info.json], instructions: instructions, screenshot: {
                                          let shot = try await t.screenshot()
@@ -518,22 +547,27 @@ actor Daemon {
         return .object(out)
     }
 
-    private func instructionsIfFirst(session s: AppSession) -> String? {
-        if s.instructionsShown { return nil }
-        s.instructionsShown = true
-        return loadInstructions(keys: [s.info.bundleId, s.info.name].compactMap { $0 })
+    // MARK: Instructions
+
+    /// Catalog stems for an app, most specific first (see `InstructionCatalog.candidates`).
+    private func instructionCandidates(for info: AppInfo) -> [String] {
+        catalog.candidates(bundleId: info.bundleId, bundleName: info.bundleName, localizedName: info.name,
+                           folderName: info.path.map { URL(fileURLWithPath: $0).deletingPathExtension().lastPathComponent })
     }
 
-    private func loadInstructions(keys: [String]) -> String? {
-        let dir = WispPaths.instructionsDir
-        for k in keys {
-            let p = dir.appendingPathComponent(k + ".md")
-            if let d = FileManager.default.contents(atPath: p.path), let s = String(data: d, encoding: .utf8), !s.isEmpty {
-                return s.trimmingCharacters(in: .whitespacesAndNewlines)
-            }
+    /// App metadata for `app.instructions`: the running app when there is one, else the installed bundle. Never
+    /// launches anything and does not open a session, so the policy deny list does not apply to this read-only query.
+    private func appInfoForInstructions(_ spec: String) throws -> AppInfo {
+        if let app = try AppResolver.findRunning(spec) { return AppResolver.info(for: app) }
+        guard let url = try AppResolver.findInstalled(spec) else {
+            throw WispError(.appNotFound, "no running or installed app matches `\(spec)`; try `wisp apps`")
         }
-        for k in keys { if let s = BuiltinInstructions.text[k] { return s } }
-        return nil
+        let bundle = Bundle(url: url)
+        let bid = bundle?.bundleIdentifier
+        let meta = AppResolver.bundleMeta(for: url, bundleId: bid)
+        let name = bundle?.infoDictionary?["CFBundleDisplayName"] as? String ?? meta.bundleName ?? url.deletingPathExtension().lastPathComponent
+        return AppInfo(bundleId: bid, bundleName: meta.bundleName, name: name, path: url.path, pid: nil, isRunning: false,
+                       lastUsed: nil, useCount: nil, isBrowser: meta.isBrowser)
     }
 
     private func screenshot(_ target: ResolvedTarget) async throws -> ScreenshotResult {
@@ -955,21 +989,4 @@ actor Daemon {
         t.lastActionAt = Date()
         try cancelToken.check()
     }
-}
-
-enum BuiltinInstructions {
-    static let text: [String: String] = [
-        "com.google.Chrome": """
-        Chrome is being driven through macOS accessibility. Web page elements appear under the `web` node. If the page tree looks empty, run `state` again (accessibility was just enabled). For heavy web automation prefer `wisp chrome` (CDP) which gives element-level DOM access.
-        """,
-        "com.apple.Safari": """
-        Safari exposes web content under the `web` node. Use `set` on the address field (role field, name "Address and Search") followed by `key Return` to navigate. Tabs are `tab` elements inside the toolbar.
-        """,
-        "com.apple.finder": """
-        Finder: double-click (`click --count 2`) opens items; `key cmd+shift+g` opens Go to Folder; the sidebar is an `outline` with `row` elements.
-        """,
-        "chrome-tab": """
-        This is a Chrome tab controlled over the DevTools Protocol. Element indices refer to DOM-backed accessibility nodes. `set` writes input values with proper input/change events; `type` inserts text at the current focus; use `wisp chrome goto` to navigate.
-        """,
-    ]
 }

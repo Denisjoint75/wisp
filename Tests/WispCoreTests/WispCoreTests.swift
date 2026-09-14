@@ -177,6 +177,29 @@ final class ProtocolTests: XCTestCase {
         XCTAssertThrowsError(try TargetSpec.parse([:]))
     }
 
+    func testStateOptionsInstructions() {
+        XCTAssertNil(StateOptions.parse(["full": true]).instructions, "absent = once per session")
+        XCTAssertEqual(StateOptions.parse(["instructions": true]).instructions, true)
+        XCTAssertEqual(StateOptions.parse(["instructions": false]).instructions, false)
+        XCTAssertNil(StateOptions.parse(["instructions": "yes"]).instructions, "non-boolean values are ignored")
+        XCTAssertTrue(StateOptions.parse([:]).json["instructions"].isNull)
+        var o = StateOptions()
+        o.instructions = false
+        XCTAssertEqual(o.json["instructions"].bool, false)
+        XCTAssertEqual(StateOptions.parse(o.json), o)
+    }
+
+    func testPolicyInstructionsMode() {
+        XCTAssertEqual(Policy().instructionsMode, "merge")
+        XCTAssertEqual(Policy.from(json: ["instructionsMode": "Replace"]).instructionsMode, "replace")
+        XCTAssertEqual(Policy.from(json: ["instructionsMode": "off"]).instructionsMode, "off")
+        XCTAssertEqual(Policy.from(json: ["instructionsMode": "bogus"]).instructionsMode, "merge", "unknown modes fall back to the default")
+        var p = Policy()
+        p.instructionsMode = "replace"
+        XCTAssertEqual(p.json["instructionsMode"].string, "replace")
+        XCTAssertEqual(Policy.from(json: p.json), p)
+    }
+
     func testPolicyMatching() {
         var p = Policy()
         XCTAssertEqual(p.decision(bundleId: "com.bitwarden.desktop", name: "Bitwarden", path: nil), .denied)

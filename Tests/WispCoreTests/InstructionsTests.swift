@@ -70,8 +70,9 @@ final class InstructionsTests: XCTestCase {
     func testComposeJoinsWithBlankLineAndBrowserBlockFirst() {
         let c = catalog().compose(candidates: ["com.example.Other"], isBrowser: true)
         XCTAssertEqual(c.text, "## Browser\n\nOpen a new tab.\n\n## Other\n\n- other guidance")
-        XCTAssertEqual(c.pieces.map(\.stem), ["_browser", "com.example.Other"])
-        XCTAssertEqual(c.pieces.map(\.source), ["builtin", "builtin"])
+        XCTAssertEqual(c.pieces, [InstructionCatalog.Piece(stem: "_browser", source: .builtin),
+                                  InstructionCatalog.Piece(stem: "com.example.Other", source: .builtin)])
+        XCTAssertEqual(c.pieces[0].json["source"].string, "builtin")
     }
 
     func testComposeDedupesIdenticalTexts() {
@@ -90,21 +91,21 @@ final class InstructionsTests: XCTestCase {
         try writeUser("com.example.App", "  \n\n")
         let c = catalog().compose(candidates: ["com.example.App"], isBrowser: false)
         XCTAssertEqual(c.text, "## Example\n\n- builtin guidance")
-        XCTAssertEqual(c.pieces.map(\.source), ["builtin"])
+        XCTAssertEqual(c.pieces.map(\.source), [.builtin])
     }
 
     func testMergeUserFileReplacesBuiltinOfSameStem() throws {
         try writeUser("com.example.App", "## Mine\n\n- user guidance\n")
         let c = catalog(.merge).compose(candidates: ["com.example.App", "com.example.Other"], isBrowser: true)
         XCTAssertEqual(c.text, "## Browser\n\nOpen a new tab.\n\n## Mine\n\n- user guidance\n\n## Other\n\n- other guidance")
-        XCTAssertEqual(c.pieces.map(\.source), ["builtin", "user", "builtin"])
+        XCTAssertEqual(c.pieces.map(\.source), [.builtin, .user, .builtin])
     }
 
     func testMergeAddsUserFileForUnknownStem() throws {
         try writeUser("com.custom.App", "## Custom")
         let c = catalog(.merge).compose(candidates: ["com.custom.App"], isBrowser: false)
         XCTAssertEqual(c.text, "## Custom")
-        XCTAssertEqual(c.pieces.map(\.source), ["user"])
+        XCTAssertEqual(c.pieces.map(\.source), [.user])
     }
 
     func testReplaceDropsAllBuiltinsWhenAnyUserFileMatches() throws {
@@ -133,13 +134,13 @@ final class InstructionsTests: XCTestCase {
     }
 
     func testLookup() throws {
-        XCTAssertEqual(catalog().lookup(stem: "com.example.App")?.source, "builtin")
+        XCTAssertEqual(catalog().lookup(stem: "com.example.App")?.source, .builtin)
         XCTAssertNil(catalog().lookup(stem: "nope"))
         XCTAssertNil(catalog().lookup(stem: "../com.example.App"))
         try writeUser("com.example.App", "## Mine")
         let hit = catalog().lookup(stem: "com.example.App")
         XCTAssertEqual(hit?.text, "## Mine")
-        XCTAssertEqual(hit?.source, "user")
+        XCTAssertEqual(hit?.source, .user)
     }
 
     // MARK: generated table matches the resource files

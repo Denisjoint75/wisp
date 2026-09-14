@@ -17,6 +17,11 @@ public struct Policy: Equatable {
     public var chromePort: Int
     public var maxChildren: Int
     public var privateWindowField: Bool
+    /// How per-app instructions are composed: `merge` (user files replace the built-in text of the same stem),
+    /// `replace` (any user match drops every built-in text) or `off`. See `InstructionCatalog.Mode`.
+    public var instructionsMode: String
+
+    public static let instructionsModes = ["merge", "replace", "off"]
 
     public static let defaultDeny = [
         "com.bitwarden.desktop", "com.1password.1password", "com.agilebits.onepassword7", "com.agilebits.onepassword-osx",
@@ -40,6 +45,7 @@ public struct Policy: Equatable {
         chromePort = 9222
         maxChildren = 60
         privateWindowField = false
+        instructionsMode = "merge"
     }
 
     public var json: JSON {
@@ -48,7 +54,8 @@ public struct Policy: Equatable {
          "clickInterval": .number(clickInterval), "settleMin": .number(settleMin), "settleQuiet": .number(settleQuiet),
          "settleMax": .number(settleMax), "cursorEnabled": .bool(cursorEnabled), "cursorAccent": .string(cursorAccent),
          "interventionDebounce": .number(interventionDebounce), "bannerEnabled": .bool(bannerEnabled),
-         "chromePort": .int(chromePort), "maxChildren": .int(maxChildren), "privateWindowField": .bool(privateWindowField)]
+         "chromePort": .int(chromePort), "maxChildren": .int(maxChildren), "privateWindowField": .bool(privateWindowField),
+         "instructionsMode": .string(instructionsMode)]
     }
 
     public static func from(json j: JSON) -> Policy {
@@ -68,6 +75,7 @@ public struct Policy: Equatable {
         if let i = j["chromePort"].int { p.chromePort = i }
         if let i = j["maxChildren"].int { p.maxChildren = max(10, min(i, 500)) }
         if let b = j["privateWindowField"].bool { p.privateWindowField = b }
+        if let m = j["instructionsMode"].string?.lowercased(), Policy.instructionsModes.contains(m) { p.instructionsMode = m }
         return p
     }
 

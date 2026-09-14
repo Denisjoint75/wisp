@@ -24,6 +24,7 @@ final class MCPServer {
         "bounds": ["type": "boolean", "description": "Append @x,y,w,h to each line."],
         "menus": ["type": "boolean", "description": "Include the menu bar in the tree."],
         "maxLines": ["type": "integer"],
+        "instructions": ["type": "boolean", "description": "App-specific guidance: omit to get it once per session (first read), true to include it again, false to suppress it."],
     ]
 
     private func schema(_ props: [String: JSON], required: [String] = []) -> JSON {
@@ -35,7 +36,7 @@ final class MCPServer {
     private lazy var tools: [Tool] = [
         Tool(name: "wisp_apps", description: "List running apps and recently used apps (id, name, bundleId, running).",
              schema: ["type": "object", "properties": ["running": ["type": "boolean"]]]),
-        Tool(name: "wisp_state", description: "Read the accessibility tree of an app window or Chrome tab as indexed text (`[12] btn \"Save\"`). Returns a diff vs the previous call by default. Call after every action before deciding what to do next; never reuse indices from an old state.",
+        Tool(name: "wisp_state", description: "Read the accessibility tree of an app window or Chrome tab as indexed text (`[12] btn \"Save\"`). Returns a diff vs the previous call by default. The first read of an app includes app-specific guidance inside <app_specific_instructions>; follow it. Call after every action before deciding what to do next; never reuse indices from an old state.",
              schema: schema(MCPServer.stateProps)),
         Tool(name: "wisp_screenshot", description: "Capture a screenshot of the target window/tab (or a display). Coordinates you pass later in `at` are in this image's pixel space.",
              schema: schema(["display": ["type": "integer"]])),
@@ -133,7 +134,7 @@ final class MCPServer {
         if let app = a["app"].string { j["app"] = .string(app) }
         if let w = a["window"].string { j["window"] = .string(w) }
         if j.isEmpty { throw WispError(.invalidParams, "specify `app` or `tab`") }
-        for k in ["full", "query", "screenshot", "bounds", "menus", "maxLines", "observe"] where !a[k].isNull { j[k] = a[k] }
+        for k in ["full", "query", "screenshot", "bounds", "menus", "maxLines", "observe", "instructions"] where !a[k].isNull { j[k] = a[k] }
         return .object(j)
     }
 

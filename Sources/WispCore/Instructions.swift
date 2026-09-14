@@ -31,14 +31,32 @@ public struct InstructionCatalog {
     /// Stem of the block injected for web browsers.
     public static let browserStem = "_browser"
 
+    /// Where a piece of instruction text came from.
+    public enum Source: String, Equatable {
+        case builtin, user
+    }
+
+    /// One piece that went into a composition: the stem that matched and where its text came from.
+    public struct Piece: Equatable {
+        public let stem: String
+        public let source: Source
+
+        public init(stem: String, source: Source) {
+            self.stem = stem
+            self.source = source
+        }
+
+        public var json: JSON { ["stem": .string(stem), "source": .string(source.rawValue)] }
+    }
+
     /// The result of `compose`: the pieces that were used, in order, and the joined text.
-    public struct Composition {
-        /// `(stem, source)` per piece; `source` is `"builtin"` or `"user"`.
-        public var pieces: [(stem: String, source: String)]
+    public struct Composition: Equatable {
+        /// One entry per piece, in the order the texts were joined.
+        public var pieces: [Piece]
         /// Pieces joined with a blank line, or nil when nothing applied.
         public var text: String?
 
-        public init(pieces: [(stem: String, source: String)] = [], text: String? = nil) {
+        public init(pieces: [Piece] = [], text: String? = nil) {
             self.pieces = pieces
             self.text = text
         }
@@ -84,9 +102,9 @@ public struct InstructionCatalog {
 
     /// The text for one stem: the user's `<userDir>/<stem>.md` when it exists and is not blank, else the built-in.
     /// Ignores `mode`; `compose` applies it.
-    public func lookup(stem: String) -> (text: String, source: String)? {
-        if let user = userText(stem: stem) { return (user, "user") }
-        if let b = builtin[stem], !b.isEmpty { return (b, "builtin") }
+    public func lookup(stem: String) -> (text: String, source: Source)? {
+        if let user = userText(stem: stem) { return (user, .user) }
+        if let b = builtin[stem], !b.isEmpty { return (b, .builtin) }
         return nil
     }
 
@@ -98,20 +116,20 @@ public struct InstructionCatalog {
         if isBrowser { stems.append(Self.browserStem) }
         for c in candidates where !stems.contains(c) { stems.append(c) }
 
-        var found: [(stem: String, source: String, text: String)] = []
+        var found: [(piece: Piece, text: String)] = []
         for stem in stems {
-            if let hit = lookup(stem: stem) { found.append((stem, hit.source, hit.text)) }
+            if let hit = lookup(stem: stem) { found.append((Piece(stem: stem, source: hit.source), hit.text)) }
         }
-        if mode == .replace, found.contains(where: { $0.source == "user" }) {
-            found.removeAll { $0.source == "builtin" }
+        if mode == .replace, found.contains(where: { $0.piece.source == .user }) {
+            found.removeAll { $0.piece.source == .builtin }
         }
 
-        var pieces: [(stem: String, source: String)] = []
+        var pieces: [Piece] = []
         var texts: [String] = []
         var seen = Set<String>()
         for f in found where !seen.contains(f.text) {
             seen.insert(f.text)
-            pieces.append((f.stem, f.source))
+            pieces.append(f.piece)
             texts.append(f.text)
         }
         return Composition(pieces: pieces, text: texts.isEmpty ? nil : texts.joined(separator: "\n\n"))

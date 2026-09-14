@@ -2,12 +2,17 @@
 # Lints Resources/AppInstructions/*.md. Fails when a file is empty, larger than 4 KB, contains non-ASCII bytes,
 # does not start with a "## " heading, or mentions a `wisp <verb>` that the CLI does not have. Warns (without
 # failing) about `wisp chrome upload|mark|dialog|show|hide`, which land in the same release as the catalog.
+# The allowed verbs are derived from the `case "..."` labels of the command switch in Sources/wisp/Commands.swift,
+# so a renamed or removed command fails the lint instead of leaving stale advice behind.
 # Usage: scripts/lint-instructions.sh [dir]
 set -euo pipefail
 cd "$(dirname "$0")/.."
 DIR="${1:-Resources/AppInstructions}"
 MAX_BYTES=4096
-ALLOWED="state click set type key scroll action select-text paste drag batch screenshot windows end apps launch chrome policy instructions move mouse-down mouse-up cancel status log doctor"
+COMMANDS="Sources/wisp/Commands.swift"
+[ -f "$COMMANDS" ] || { echo "lint-instructions: missing $COMMANDS" >&2; exit 1; }
+ALLOWED=$(awk '/static func run\(/ { on = 1 } on' "$COMMANDS" | grep -oE 'case "[a-z][a-z-]*"(, "[a-z][a-z-]*")*' | grep -oE '"[a-z][a-z-]*"' | tr -d '"' | LC_ALL=C sort -u | tr '\n' ' ')
+[ -n "$ALLOWED" ] || { echo "lint-instructions: no command verbs found in $COMMANDS" >&2; exit 1; }
 
 [ -d "$DIR" ] || { echo "lint-instructions: missing $DIR" >&2; exit 1; }
 

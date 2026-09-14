@@ -14,6 +14,7 @@ public enum Proto {
         public static let appScreenshot = "app.screenshot"
         public static let appPerform = "app.perform"
         public static let appBatch = "app.batch"
+        public static let appInstructions = "app.instructions"
         public static let sessionCancel = "session.cancel"
         public static let sessionEnd = "session.end"
         public static let sessionStatus = "session.status"
@@ -226,6 +227,9 @@ public struct StateOptions: Equatable {
     public var bounds: Bool = false
     public var includeMenus: Bool = false
     public var maxLines: Int = 400
+    /// Per-app instructions in the response: nil delivers them once per session (first observation), true forces
+    /// them on this read, false suppresses them.
+    public var instructions: Bool? = nil
 
     public init() {}
 
@@ -237,11 +241,13 @@ public struct StateOptions: Equatable {
         o.bounds = j["bounds"].bool ?? false
         o.includeMenus = j["menus"].bool ?? false
         if let m = j["maxLines"].int, m > 20 { o.maxLines = m }
+        o.instructions = j["instructions"].bool
         return o
     }
 
     public var json: JSON {
         [String: JSON].compact([("full", .bool(full)), ("query", query.map { .string($0) }), ("screenshot", .bool(screenshot)),
-                                ("bounds", .bool(bounds)), ("menus", .bool(includeMenus)), ("maxLines", .int(maxLines))])
+                                ("bounds", .bool(bounds)), ("menus", .bool(includeMenus)), ("maxLines", .int(maxLines)),
+                                ("instructions", instructions.map { .bool($0) })])
     }
 }

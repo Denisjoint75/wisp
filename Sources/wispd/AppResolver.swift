@@ -4,12 +4,16 @@ import WispCore
 
 struct AppInfo {
     var bundleId: String?
+    /// `CFBundleName` from the bundle's Info.plist (an instruction-catalog candidate); nil when unknown.
+    var bundleName: String? = nil
     var name: String
     var path: String?
     var pid: pid_t?
     var isRunning: Bool
     var lastUsed: Date?
     var useCount: Int?
+    /// True when the app registers the `http` URL scheme or is a known browser (`InstructionCatalog.isWebBrowser`).
+    var isBrowser: Bool = false
 
     var json: JSON {
         [String: JSON].compact([
@@ -45,8 +49,35 @@ enum AppResolver {
     }
 
     static func info(for app: NSRunningApplication) -> AppInfo {
-        AppInfo(bundleId: app.bundleIdentifier, name: app.localizedName ?? app.bundleIdentifier ?? "app \(app.processIdentifier)",
-                path: app.bundleURL?.path, pid: app.processIdentifier, isRunning: true, lastUsed: nil, useCount: nil)
+        let meta = bundleMeta(for: app.bundleURL, bundleId: app.bundleIdentifier)
+        return AppInfo(bundleId: app.bundleIdentifier, bundleName: meta.bundleName,
+                       name: app.localizedName ?? app.bundleIdentifier ?? "app \(app.processIdentifier)",
+                       path: app.bundleURL?.path, pid: app.processIdentifier, isRunning: true, lastUsed: nil, useCount: nil,
+                       isBrowser: meta.isBrowser)
+    }
+
+    /// URL schemes an app bundle registers (`CFBundleURLTypes` / `CFBundleURLSchemes` in its Info.plist).
+    static func urlSchemes(for bundleURL: URL?) -> [String] {
+        guard let url = bundleURL, let types = Bundle(url: url)?.infoDictionary?["CFBundleURLTypes"] as? [[String: Any]] else { return [] }
+        return types.flatMap { ($0["CFBundleURLSchemes"] as? [String]) ?? [] }
+    }
+
+    struct BundleMeta { var bundleName: String?; var isBrowser: Bool }
+
+    private static let metaLock = NSLock()
+    private static var metaCache: [String: BundleMeta] = [:]
+
+    /// Reads `CFBundleName` and the browser flag from a bundle's Info.plist once per bundle path. The dictionary
+    /// itself is not kept: it is large and only these two facts are needed.
+    static func bundleMeta(for bundleURL: URL?, bundleId: String?) -> BundleMeta {
+        guard let url = bundleURL else { return BundleMeta(bundleName: nil, isBrowser: InstructionCatalog.isWebBrowser(infoDictionary: nil, bundleId: bundleId)) }
+        metaLock.lock(); defer { metaLock.unlock() }
+        if let cached = metaCache[url.path] { return cached }
+        let info = Bundle(url: url)?.infoDictionary
+        let meta = BundleMeta(bundleName: info?["CFBundleName"] as? String,
+                              isBrowser: InstructionCatalog.isWebBrowser(infoDictionary: info, bundleId: bundleId ?? Bundle(url: url)?.bundleIdentifier))
+        metaCache[url.path] = meta
+        return meta
     }
 
     /// Finds a running application by bundle id, name, or path. Throws `ambiguousApp` for several distinct matches.

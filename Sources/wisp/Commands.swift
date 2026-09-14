@@ -31,6 +31,13 @@ struct Output {
             print("\(r["path"].string ?? "") \(r["width"].int ?? 0)x\(r["height"].int ?? 0) scale=\(r["scale"].double ?? 0)")
         case "text":
             print(r.string ?? r.stringified(pretty: true))
+        case "instructions":
+            print("app: \(r["app"]["name"].string ?? "") (\(r["app"]["bundleId"].string ?? "no bundle id"))\(r["isBrowser"].bool == true ? ", browser" : "")")
+            print("mode: \(r["mode"].string ?? "")")
+            print("candidates: \((r["candidates"].array ?? []).compactMap { $0.string }.joined(separator: ", "))")
+            let matched = (r["matched"].array ?? []).map { "\($0["stem"].string ?? "") (\($0["source"].string ?? ""))" }
+            print("matched: \(matched.isEmpty ? "none" : matched.joined(separator: ", "))")
+            if let t = r["text"].string { print(""); print(t) }
         default:
             print(r.stringified(pretty: true))
         }
@@ -69,6 +76,8 @@ enum Commands {
         if a.flag("bounds") { o["bounds"] = true }
         if a.flag("menus") { o["menus"] = true }
         if let m = a.int("max-lines") { o["maxLines"] = .int(m) }
+        if a.flag("instructions") { o["instructions"] = true }
+        if a.flag("no-instructions") { o["instructions"] = false }
         return .object(o)
     }
 
@@ -106,6 +115,7 @@ enum Commands {
             case "mcp": return MCPServer().serve()
             case "doctor": return doctor(a, out)
             case "daemon": return daemon(a, out)
+            case "instructions" where a.rest.first == "list": return instructionsList(out)
             default: break
             }
             let client = WispClient()
@@ -228,8 +238,15 @@ enum Commands {
                     if a.flag("no-cursor") { p["cursorEnabled"] = false }
                     if a.flag("cursor") { p["cursorEnabled"] = true }
                     if let port = a.int("port") { p["chromePort"] = .int(port) }
+                    if let m = a.value("instructions-mode") {
+                        guard Policy.instructionsModes.contains(m.lowercased()) else { throw WispError(.invalidParams, "--instructions-mode must be merge, replace or off") }
+                        p["instructionsMode"] = .string(m.lowercased())
+                    }
                     result = try client.call(Proto.Method.policySet, p)
                 } else { throw WispError(.invalidParams, "policy get|set") }
+            case "instructions":
+                guard a.rest.first == "show" else { throw WispError(.invalidParams, "instructions list | show --app X") }
+                result = try client.call(Proto.Method.appInstructions, try target(a)); kind = "instructions"
             case "chrome":
                 let sub = a.rest.first ?? "status"
                 var p: JSON = [:]
@@ -325,6 +342,27 @@ enum Commands {
         return 0
     }
 
+    /// `wisp instructions list`: every built-in stem plus the user's own files, without talking to the daemon.
+    static func instructionsList(_ out: Output) -> Int32 {
+        let dir = WispPaths.instructionsDir
+        let userStems = Set(((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? [])
+            .filter { $0.hasSuffix(".md") }.map { String($0.dropLast(3)) })
+        let builtin = Set(BuiltinInstructions.text.keys)
+        var rows: [JSON] = []
+        for stem in builtin.union(userStems).sorted() {
+            let source = userStems.contains(stem) ? "user" : "builtin"
+            rows.append(["stem": .string(stem), "source": .string(source), "overridesBuiltin": .bool(userStems.contains(stem) && builtin.contains(stem))])
+        }
+        if out.json { print(JSON.object(["directory": .string(dir.path), "stems": .array(rows)]).stringified(pretty: true)); return 0 }
+        for r in rows {
+            let stem = r["stem"].string ?? ""
+            let mark = r["overridesBuiltin"].bool == true ? "user (overrides builtin)" : (r["source"].string ?? "")
+            print("\(stem.padding(toLength: max(stem.count, 32), withPad: " ", startingAt: 0))  \(mark)")
+        }
+        print("\(builtin.count) builtin, \(userStems.count) user (\(dir.path))")
+        return 0
+    }
+
     static func daemon(_ a: Args, _ out: Output) -> Int32 {
         let sub = a.rest.first ?? "status"
         let client = WispClient()
@@ -365,7 +403,9 @@ enum Commands {
       wisp apps [--running]                      list running apps and apps used in the last 14 days
       wisp windows --app X                       list windows
       wisp state --app X [--full] [--query Q] [--screenshot] [--bounds] [--menus] [--max-lines N]
+                 [--instructions | --no-instructions]   app guidance is included once per session by default
       wisp screenshot --app X | --tab T | --display N [-o out.png]
+      wisp instructions list | show --app X      built-in and user (~/.config/wisp/instructions) app guidance
 
     Act (every action returns the new state diff unless --no-observe)
       wisp click --app X --el N | --at x,y [--right|--middle] [--double|--triple]
@@ -384,7 +424,8 @@ enum Commands {
       then use --tab T with state/click/type/...
 
     Session & daemon
-      wisp cancel | end [--app X] | status | policy get|set | log
+      wisp cancel | end [--app X] | status | log
+      wisp policy get | set [--allow ID ...] [--deny ID ...] [--instructions-mode merge|replace|off] ...
       wisp doctor [--request-permissions]        wisp daemon start|stop|restart|status|log
       wisp mcp                                   MCP stdio server exposing the same tools
       wisp --json ... for machine-readable output

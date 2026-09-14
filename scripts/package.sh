@@ -25,6 +25,11 @@ PUBKEY="${SPARKLE_PUBLIC_KEY:-$(cat assets/sparkle-public-key.txt 2>/dev/null ||
 VERSION=$(sed -n 's/.*static let string = "\(.*\)".*/\1/p' Sources/WispCore/Version.swift)
 BUILD=$(sed -n 's/.*static let build = "\(.*\)".*/\1/p' Sources/WispCore/Version.swift)
 
+# Regenerate the built-in instruction table from Resources/AppInstructions and lint the sources; lint errors
+# fail the build (set -e).
+scripts/gen-instructions.sh
+scripts/lint-instructions.sh
+
 echo "building release ($VERSION build $BUILD)…"
 if [ "$UNIVERSAL" = 1 ]; then
   swift build -c release --arch arm64 --arch x86_64 2>&1 | tail -1

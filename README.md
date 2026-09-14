@@ -116,6 +116,13 @@ running Wisp Chrome instead of starting another.
 
 Your existing Chrome windows can be controlled through accessibility instead: `wisp state --app "Google Chrome"`.
 
+The first `state` of an app starts with `<app_specific_instructions>`: built-in guidance for that app (Safari, Mail,
+Finder, Slack, Chrome tabs, ...) plus a browser block for anything that handles `http` URLs; `--instructions` repeats
+it and `--no-instructions` suppresses it. Drop your own Markdown at `~/.config/wisp/instructions/<bundle id>.md`
+to override or extend a text (`wisp instructions list` shows every stem, `wisp instructions show --app X` prints
+what an app would receive), and set `instructionsMode` in the policy (`wisp policy set --instructions-mode
+merge|replace|off`) to choose whether user files merge with, replace, or switch off the built-in texts.
+
 `wisp --json …` prints machine-readable JSON. `wisp mcp` serves the same operations as MCP tools
 (`wisp_state`, `wisp_click`, `wisp_set`, …); add it to Claude Code with
 `claude mcp add wisp -- /path/to/wisp mcp`. The model-facing guide lives in [skills/wisp/SKILL.md](skills/wisp/SKILL.md).

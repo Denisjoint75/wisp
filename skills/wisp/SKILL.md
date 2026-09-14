@@ -60,6 +60,8 @@ wisp screenshot --app Preview          # then: wisp click --app Preview --at 640
 - States: `focused disabled checked unchecked expanded collapsed selected busy`. `secure-field` values are hidden.
 - Diffs use `~` changed, `+` added, `- [a..b]` removed by index range; `# no change` means nothing moved.
 - `--query "text"` keeps only matching lines and their ancestors; `--full` forces a full tree; `--bounds` adds `@x,y,w,h`.
+- The first state of an app may start with `<app_specific_instructions>`; follow them (`--instructions` shows them
+  again, `wisp instructions show --app X` prints them without reading the window).
 
 ## Rules
 
