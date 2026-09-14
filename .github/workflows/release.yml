@@ -1,0 +1,138 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release (e.g. 0.2.0); a tag v<version> is created"
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build, sign, notarize, publish
+    runs-on: macos-15
+    env:
+      REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then VERSION="${{ github.event.inputs.version }}"; else VERSION="${GITHUB_REF_NAME#v}"; fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "BUILD=${GITHUB_RUN_NUMBER}" >> "$GITHUB_ENV"
+          echo "releasing $VERSION (build $GITHUB_RUN_NUMBER)"
+
+      - name: Import Developer ID certificate
+        env:
+          MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KEYCHAIN="$RUNNER_TEMP/build.keychain-db"
+          echo "$MACOS_CERTIFICATE_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$RUNNER_TEMP/cert.p12" -P "$MACOS_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security list-keychains -d user -s "$KEYCHAIN" login.keychain-db
+          IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN" | grep "Developer ID Application" | head -1 | sed -E 's/.*"(.*)".*/\1/')
+          test -n "$IDENTITY"
+          echo "SIGN_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
+          echo "KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
+          rm -f "$RUNNER_TEMP/cert.p12"
+
+      - name: Set version
+        run: scripts/set-version.sh "$VERSION" "$BUILD"
+
+      - name: Build, package and sign
+        run: scripts/package.sh --identity "$SIGN_IDENTITY" --output dist
+
+      - name: Notarize and staple
+        env:
+          NOTARY_APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
+          NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
+          NOTARY_TEAM_ID: ${{ secrets.NOTARY_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          ditto -c -k --keepParent dist/Wisp.app dist/Wisp-notarize.zip
+          xcrun notarytool submit dist/Wisp-notarize.zip --apple-id "$NOTARY_APPLE_ID" --team-id "$NOTARY_TEAM_ID" --password "$NOTARY_PASSWORD" --wait
+          xcrun stapler staple dist/Wisp.app
+          rm dist/Wisp-notarize.zip
+          # CLI binary (notarized; bare executables cannot be stapled, Gatekeeper checks online)
+          ditto -c -k dist/wisp dist/wisp-cli-notarize.zip
+          xcrun notarytool submit dist/wisp-cli-notarize.zip --apple-id "$NOTARY_APPLE_ID" --team-id "$NOTARY_TEAM_ID" --password "$NOTARY_PASSWORD" --wait
+          rm dist/wisp-cli-notarize.zip
+
+      - name: Build archives
+        run: |
+          set -euo pipefail
+          mkdir -p dist/appcast
+          ditto -c -k --keepParent dist/Wisp.app "dist/appcast/Wisp-$VERSION.zip"
+          hdiutil create -volname "Wisp" -srcfolder dist/Wisp.app -ov -format UDZO "dist/Wisp-$VERSION.dmg"
+          codesign --force --sign "$SIGN_IDENTITY" --timestamp "dist/Wisp-$VERSION.dmg"
+          (cd dist && zip -q "wisp-cli-$VERSION.zip" wisp)
+          shasum -a 256 "dist/appcast/Wisp-$VERSION.zip" "dist/Wisp-$VERSION.dmg" "dist/wisp-cli-$VERSION.zip" > dist/SHA256SUMS.txt
+
+      - name: Notarize DMG
+        env:
+          NOTARY_APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
+          NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
+          NOTARY_TEAM_ID: ${{ secrets.NOTARY_TEAM_ID }}
+        run: |
+          xcrun notarytool submit "dist/Wisp-$VERSION.dmg" --apple-id "$NOTARY_APPLE_ID" --team-id "$NOTARY_TEAM_ID" --password "$NOTARY_PASSWORD" --wait
+          xcrun stapler staple "dist/Wisp-$VERSION.dmg"
+
+      - name: Generate Sparkle appcast
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          SPARKLE_VERSION=$(grep -A6 '"identity" : "sparkle"' Package.resolved | sed -n 's/.*"version" *: *"\([^"]*\)".*/\1/p' | head -1)
+          SPARKLE_VERSION="${SPARKLE_VERSION:-2.10.0}"
+          curl -sL -o "$RUNNER_TEMP/Sparkle.tar.xz" "https://github.com/sparkle-project/Sparkle/releases/download/$SPARKLE_VERSION/Sparkle-$SPARKLE_VERSION.tar.xz"
+          mkdir -p "$RUNNER_TEMP/sparkle" && tar -xf "$RUNNER_TEMP/Sparkle.tar.xz" -C "$RUNNER_TEMP/sparkle"
+          printf '%s' "$SPARKLE_PRIVATE_KEY" > "$RUNNER_TEMP/sparkle.key"
+          # Release notes for this version, shown inside the Sparkle update dialog.
+          gh release view "v$VERSION" --json body --jq .body > "dist/appcast/Wisp-$VERSION.md" 2>/dev/null || echo "Wisp $VERSION" > "dist/appcast/Wisp-$VERSION.md"
+          printf '<html><body><pre>%s</pre></body></html>' "$(sed 's/&/\&amp;/g; s/</\&lt;/g' "dist/appcast/Wisp-$VERSION.md")" > "dist/appcast/Wisp-$VERSION.html"
+          rm "dist/appcast/Wisp-$VERSION.md"
+          "$RUNNER_TEMP/sparkle/bin/generate_appcast" --ed-key-file "$RUNNER_TEMP/sparkle.key" \
+            --download-url-prefix "https://github.com/$REPO/releases/download/v$VERSION/" \
+            --link "https://github.com/$REPO/releases" \
+            -o dist/appcast.xml dist/appcast
+          rm -f "$RUNNER_TEMP/sparkle.key"
+          cat dist/appcast.xml
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="v$VERSION"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            git tag -f "$TAG" && git push origin "$TAG" --force
+          fi
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" --clobber "dist/appcast/Wisp-$VERSION.zip" "dist/Wisp-$VERSION.dmg" "dist/wisp-cli-$VERSION.zip" dist/appcast.xml dist/SHA256SUMS.txt
+          else
+            gh release create "$TAG" --title "Wisp $VERSION" --generate-notes \
+              "dist/appcast/Wisp-$VERSION.zip" "dist/Wisp-$VERSION.dmg" "dist/wisp-cli-$VERSION.zip" dist/appcast.xml dist/SHA256SUMS.txt
+          fi
+
+      - name: Remove signing keychain
+        if: always()
+        run: |
+          if [ -n "${KEYCHAIN:-}" ] && [ -f "$KEYCHAIN" ]; then security delete-keychain "$KEYCHAIN"; fi

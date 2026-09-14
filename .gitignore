@@ -1,0 +1,8 @@
+.build/
+.swiftpm/
+dist/
+*.p12
+*.key
+*.xcodeproj
+/tmp/
+.DS_Store

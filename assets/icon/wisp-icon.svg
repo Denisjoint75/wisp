@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#5C8BFF"/>
+      <stop offset="0.55" stop-color="#5B5CE6"/>
+      <stop offset="1" stop-color="#3D2A9E"/>
+    </linearGradient>
+    <radialGradient id="bgGlow" cx="0.38" cy="0.32" r="0.75">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.22"/>
+      <stop offset="0.5" stop-color="#FFFFFF" stop-opacity="0.04"/>
+      <stop offset="1" stop-color="#000000" stop-opacity="0.18"/>
+    </radialGradient>
+    <linearGradient id="arrowFill" x1="0" y1="0" x2="0.6" y2="1">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#DCE6FF"/>
+    </linearGradient>
+    <linearGradient id="trail" gradientUnits="userSpaceOnUse" x1="540" y1="560" x2="850" y2="850">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.95"/>
+      <stop offset="0.45" stop-color="#BFD0FF" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#8FA6FF" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="28" result="b"/>
+      <feColorMatrix in="b" type="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 0.9 0"/>
+    </filter>
+    <filter id="softGlow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="14"/>
+    </filter>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="10" result="s"/>
+      <feOffset in="s" dx="0" dy="14" result="o"/>
+      <feColorMatrix in="o" type="matrix" values="0 0 0 0 0.05  0 0 0 0 0.05  0 0 0 0 0.25  0 0 0 0.45 0" result="sh"/>
+      <feMerge><feMergeNode in="sh"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <!-- rounded-square background (macOS icon shape) -->
+  <rect x="0" y="0" width="1024" height="1024" rx="229" ry="229" fill="url(#bg)"/>
+  <rect x="0" y="0" width="1024" height="1024" rx="229" ry="229" fill="url(#bgGlow)"/>
+
+  <!-- comet trail sweeping in from the lower right -->
+  <path filter="url(#softGlow)" fill="url(#trail)"
+        d="M 548 560 C 640 600, 720 690, 836 852 C 760 760, 690 700, 590 660 C 560 645, 548 610, 548 560 Z"/>
+  <path fill="url(#trail)" opacity="0.85"
+        d="M 548 560 C 640 600, 720 690, 836 852 C 760 760, 690 700, 590 660 C 560 645, 548 610, 548 560 Z"/>
+
+  <!-- glow behind the arrow -->
+  <path filter="url(#glow)" fill="#FFFFFF" opacity="0.85"
+        d="M 318 246 L 318 700 L 438 590 L 522 762 L 610 720 L 528 552 L 690 552 Z"/>
+
+  <!-- the cursor arrow -->
+  <path filter="url(#shadow)" fill="url(#arrowFill)" stroke="#2E3FA6" stroke-opacity="0.35" stroke-width="10" stroke-linejoin="round"
+        d="M 318 246 L 318 700 L 438 590 L 522 762 L 610 720 L 528 552 L 690 552 Z"/>
+
+  <!-- sparkles -->
+  <g fill="#FFFFFF">
+    <path opacity="0.95" d="M 760 300 C 766 340, 786 360, 826 366 C 786 372, 766 392, 760 432 C 754 392, 734 372, 694 366 C 734 360, 754 340, 760 300 Z"/>
+    <path opacity="0.8" d="M 236 792 C 240 816, 252 828, 276 832 C 252 836, 240 848, 236 872 C 232 848, 220 836, 196 832 C 220 828, 232 816, 236 792 Z"/>
+    <path opacity="0.7" d="M 664 228 C 666 240, 672 246, 684 248 C 672 250, 666 256, 664 268 C 662 256, 656 250, 644 248 C 656 246, 662 240, 664 228 Z"/>
+    <circle cx="880" cy="470" r="9" opacity="0.6"/>
+    <circle cx="160" cy="620" r="6" opacity="0.5"/>
+  </g>
+</svg>
