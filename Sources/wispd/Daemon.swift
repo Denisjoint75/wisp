@@ -434,13 +434,16 @@ actor Daemon {
         try await authorize(bundleId: bid, name: name, path: url.path)
         Log.info("launching \(url.path)")
         let app = try await AppResolver.launch(url: url, activate: activate && !policy.usesBackground(bundleId: bid, name: name))
-        let s = try await makeSession(app, authorized: true)
-        // wait for a window
-        for _ in 0..<80 {
-            if !AppResolver.windows(of: app).isEmpty { break }
-            await EventSynth.sleep(0.125)
+        // Wait for the app to finish launching and then for a real (on-screen, CG-backed) window: a state read or
+        // an action right after the launch would otherwise find nothing to target. The session is created only
+        // once a window exists, so a launch that never shows one leaves nothing behind.
+        let deadline = Date().addingTimeInterval(15)
+        while !app.isFinishedLaunching, !app.isTerminated, Date() < deadline { await EventSynth.sleep(0.1) }
+        while !AppResolver.windows(of: app).contains(where: { $0.id != nil }) {
+            guard Date() < deadline else { throw WispError(.launchFailed, "\(name) launched but showed no window within 15 s") }
+            await EventSynth.sleep(0.1)
         }
-        return s
+        return try await makeSession(app, authorized: true)
     }
 
     /// Returns the session for a running app, creating it after the approval check. `authorized` skips the check

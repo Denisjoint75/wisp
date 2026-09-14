@@ -84,6 +84,26 @@ public struct WispError: Error, CustomStringConvertible {
 
     public var description: String { "\(code.name): \(message)" }
 
+    /// A plain-language sentence for the interruption codes an agent should relay to the user, ending with the code
+    /// name in parentheses so the agent can still pattern-match. `nil` for every other error: callers keep their
+    /// own `name: message` format for those.
+    public var userFacingText: String? { WispError.userFacingText(for: code) }
+
+    public static func userFacingText(for code: WispErrorCode) -> String? {
+        switch code {
+        case .userIntervened:
+            return "Wisp stopped because you took control of the mouse or keyboard. Re-read the state before continuing. (userIntervened)"
+        case .userStoppedSession:
+            return "Wisp stopped because you pressed Esc or chose Stop in the menu bar. (userStoppedSession)"
+        case .screenLocked:
+            return "Wisp paused because the screen is locked. (screenLocked)"
+        case .cancelled:
+            return "The action was cancelled. (cancelled)"
+        default:
+            return nil
+        }
+    }
+
     public var json: JSON {
         var o: [String: JSON] = ["code": .int(code.rawValue), "name": .string(code.name), "message": .string(message)]
         if let d = data { o["data"] = d }

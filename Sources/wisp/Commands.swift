@@ -131,7 +131,9 @@ enum Commands {
             case "windows":
                 result = try client.call(Proto.Method.appWindows, try target(a)); kind = "windows"
             case "launch":
-                result = try client.call(Proto.Method.appLaunch, merge(try target(a), ["activate": .bool(!a.flag("no-activate"))])); kind = "windows"
+                // Launch in the background like every other Wisp operation; --activate opts into bringing it forward.
+                let activate = a.flag("activate") && !a.flag("no-activate")
+                result = try client.call(Proto.Method.appLaunch, merge(try target(a), ["activate": .bool(activate)])); kind = "windows"
             case "activate":
                 result = try client.call(Proto.Method.appActivate, try target(a))
             case "state":
@@ -369,7 +371,7 @@ enum Commands {
             return 0
         } catch let e as WispError {
             if out.json { print(JSON.object(["error": e.json]).stringified(pretty: true)) }
-            else { FileHandle.standardError.write(Data("error: \(e.code.name): \(e.message)\n".utf8)) }
+            else { FileHandle.standardError.write(Data("error: \(e.userFacingText ?? "\(e.code.name): \(e.message)")\n".utf8)) }
             if let d = e.data, !out.json { FileHandle.standardError.write(Data((d.stringified(pretty: true) + "\n").utf8)) }
             return e.code == .userIntervened || e.code == .userStoppedSession || e.code == .cancelled ? 3 : 1
         } catch {
@@ -477,6 +479,7 @@ enum Commands {
     Observe
       wisp apps [--running]                      list running apps and apps used in the last 14 days
       wisp windows --app X                       list windows
+      wisp launch --app X [--activate]           launch in the background (--activate brings it forward) and list windows
       wisp state --app X [--full] [--query Q] [--screenshot] [--bounds] [--menus] [--max-lines N]
                  [--instructions | --no-instructions]   app guidance is included once per session by default
       wisp screenshot --app X | --tab T | --display N [-o out.png]

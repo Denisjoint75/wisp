@@ -56,18 +56,23 @@ Wisp ships a skill and an MCP server so an agent can drive the UI for you.
   claude mcp add wisp -- wisp mcp
   ```
 
-- **Stop hook**: end the Wisp session (cursor, banner, scratch Chrome tabs) whenever Claude Code finishes a turn,
-  even if the agent forgot to run `wisp end`. Add to `~/.claude/settings.json`:
+- **Stop hook**: end the Wisp session (cursor, banner, scratch Chrome tabs) whenever Claude Code finishes a turn
+  or the user interrupts it, even if the agent forgot to run `wisp end`. Add to `~/.claude/settings.json`:
 
   ```json
   {
     "hooks": {
       "Stop": [
-        { "hooks": [ { "type": "command", "command": "wisp end" } ] }
+        { "hooks": [ { "type": "command", "command": "wisp status >/dev/null 2>&1 && wisp end" } ] }
       ]
     }
   }
   ```
+
+  The `wisp status` guard keeps the hook from starting the daemon on turns that never used Wisp (a bare `wisp end`
+  would). Note that `wisp end` without `--app`/`--tab` ends every Wisp session on the machine, not only the ones
+  this agent opened. Over MCP the equivalent is the `wisp_turn_end` tool: call it when the task is finished or the
+  user interrupts.
 
 ### From source
 

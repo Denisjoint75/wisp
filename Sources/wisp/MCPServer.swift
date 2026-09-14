@@ -62,8 +62,10 @@ final class MCPServer {
              schema: schema(["text": ["type": "string"], "format": ["type": "string", "enum": ["text", "md", "html"]], "observe": ["type": "boolean"]], required: ["text"])),
         Tool(name: "wisp_batch", description: "Run several actions in one round trip: steps are objects like {\"kind\":\"click\",\"el\":4}, {\"kind\":\"type\",\"text\":\"hi\"}, {\"kind\":\"key\",\"key\":\"Return\"}, {\"kind\":\"state\"}, {\"kind\":\"sleep\",\"seconds\":0.5}. Stops at the first failure; returns the final state.",
              schema: schema(["steps": ["type": "array", "items": ["type": "object"]], "observe": ["type": "boolean"]], required: ["steps"])),
-        Tool(name: "wisp_launch", description: "Launch (or bring forward) an app by name/bundle id and list its windows.", schema: schema([:], required: ["app"])),
+        Tool(name: "wisp_launch", description: "Launch an app by name/bundle id in the background (it is not brought to the front unless activate=true) and list its windows. Waits until the app shows a window.",
+             schema: schema(["activate": ["type": "boolean", "description": "Bring the app to the front after launching (default false: it stays behind the user's windows)."]], required: ["app"])),
         Tool(name: "wisp_end", description: "End the control session for an app, a Chrome tab (closes it), or everything (no app/tab), hiding the cursor and banner. A bare wisp_end ends the turn: Chrome tabs you opened that are not marked deliverable/handoff are closed.", schema: schema([:])),
+        Tool(name: "wisp_turn_end", description: "End every Wisp session: call when the task is finished or the user interrupts; closes unmarked agent tabs and hides the cursor.", schema: ["type": "object", "properties": [:]]),
         Tool(name: "wisp_cancel", description: "Cancel the action currently running in the daemon.", schema: ["type": "object", "properties": [:]]),
         Tool(name: "wisp_chrome", description: "Chrome DevTools helpers: status, launch (starts Chrome hidden in the background with a debug port and a dedicated profile; visible=true shows it), tabs (with [agent]/[deliverable]/[handoff] marks), new (url), goto (tab,url), eval (tab, expression), close, back, forward, reload, upload (tab, files; el optional: fills the file input you clicked), dialog (tab, accept, text: answers the alert/confirm/prompt that wisp_state reports), mark (tab, mark: deliverable/handoff keep the tab past wisp_end), show (tab optional: bring Chrome forward), hide. Then use `tab` in the other tools.",
              schema: ["type": "object", "properties": ["command": ["type": "string", "enum": ["status", "launch", "tabs", "new", "goto", "eval", "close", "back", "forward", "reload", "upload", "dialog", "mark", "show", "hide"]],
@@ -108,7 +110,12 @@ final class MCPServer {
             write(Proto.result(id: id, ["protocolVersion": .string(v), "capabilities": ["tools": ["listChanged": false]],
                                          "serverInfo": ["name": "wisp", "version": .string(WispVersion.string)],
                                          "instructions": .string(MCPServer.instructions)]))
-        case "notifications/initialized", "notifications/cancelled": break
+        case "notifications/initialized": break
+        case "notifications/cancelled":
+            // Best effort: ask the daemon to abort whatever is in flight. A separate connection keeps the tool
+            // client's state untouched, and a daemon that is not running has nothing to cancel.
+            let c = WispClient()
+            if (try? c.connect(autoStart: false)) != nil { _ = try? c.call(Proto.Method.sessionCancel, [:], timeout: 5) }
         case "ping": write(Proto.result(id: id, [:]))
         case "tools/list":
             write(Proto.result(id: id, ["tools": .array(tools.map { ["name": .string($0.name), "description": .string($0.description), "inputSchema": $0.schema] })]))
@@ -122,7 +129,9 @@ final class MCPServer {
                 // A refusal is a plain message for the model: the app is off limits or the user said no.
                 write(Proto.result(id: id, ["content": [["type": "text", "text": .string(e.message)]], "isError": true]))
             } catch let e as WispError {
-                write(Proto.result(id: id, ["content": [["type": "text", "text": .string("error \(e.code.name): \(e.message)" + (e.data.map { "\n" + $0.stringified(pretty: true) } ?? ""))]], "isError": true]))
+                // Interruptions become a sentence the model can relay to the user; other errors keep `name: message`.
+                let text = e.userFacingText ?? "error \(e.code.name): \(e.message)" + (e.data.map { "\n" + $0.stringified(pretty: true) } ?? "")
+                write(Proto.result(id: id, ["content": [["type": "text", "text": .string(text)]], "isError": true]))
             } catch {
                 write(Proto.result(id: id, ["content": [["type": "text", "text": .string("error: \(error)")]], "isError": true]))
             }
@@ -216,8 +225,11 @@ final class MCPServer {
             return out
         case "wisp_launch":
             // Launching may wait for the user's approval prompt (up to 120 s), so this needs the long timeout.
-            let r = try client.call(Proto.Method.appLaunch, ["app": args["app"], "activate": true], timeout: 300)
+            let r = try client.call(Proto.Method.appLaunch, ["app": args["app"], "activate": .bool(args["activate"].bool ?? false)], timeout: 300)
             return [["type": "text", "text": .string(r.stringified(pretty: true))]]
+        case "wisp_turn_end":
+            _ = try client.call(Proto.Method.sessionEnd, [:])
+            return [["type": "text", "text": "turn ended: every Wisp session closed"]]
         case "wisp_end":
             var p: [String: JSON] = [:]
             if let a = args["app"].string { p["app"] = .string(a) }

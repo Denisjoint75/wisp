@@ -30,8 +30,9 @@ doctor` shows what is still missing. Only continue once `wisp doctor` reports Ac
 
 ## Workflow
 
-1. Pick the target: `--app <name|bundle id|path>` for native apps (launched automatically), or `--tab <id>` for a
-   Chrome tab started with `wisp chrome launch`.
+1. Pick the target: `--app <name|bundle id|path>` for native apps (launched automatically, in the background;
+   `wisp launch --app X [--activate]` starts one explicitly), or `--tab <id>` for a Chrome tab started with
+   `wisp chrome launch`.
 2. Read state: `wisp state --app Safari` (full tree on first call, diff afterwards).
 3. Act using indices from the **latest** state: `wisp click --app Safari --el 12`.
 4. Read the diff in the action result, decide the next step. Never reuse an index from an older state.
@@ -49,7 +50,7 @@ wisp screenshot --app Preview          # then: wisp click --app Preview --at 640
 ## Reading the tree
 
 ```
-# TextEdit - "Untitled" (window 2371, 640x480 at 100,120; pid 812)
+# TextEdit — "Untitled" (window 2371, 640x480 at 100,120; pid 812)
 [0] window "Untitled"
   [1] toolbar
     [2] btn "Bold" {ShowMenu}
@@ -78,16 +79,16 @@ Observing
 - Prefer the accessibility tree. When it looks empty or incomplete, add `--screenshot` (needs Screen Recording) and
   click by pixel coordinates with `--at x,y --space screenshot`, using only a screenshot taken in the same state.
   Wisp attaches a screenshot automatically when a window exposes no actionable elements.
-- After a screenshot-only observation, request `--full` before trusting indices again.
-- Once the requested result is visibly present, stop exploring and answer. Never report success the state does
-  not show.
+- A screenshot alone does not refresh indices: run `wisp state --full` before using `--el` again.
+- Stop as soon as the state shows what was asked for; do not keep exploring, and never claim a result the state
+  does not show.
 
 Acting
 
 - Prefer `--el` over coordinates. If an action has no visible effect, look for a blocker (a sheet, a dialog, a
   disabled control, focus in the wrong place) before retrying or switching to coordinates.
-- Sheets, dialogs and Open/Save panels are separate windows: list them with `wisp windows --app X` and target one
-  with `--window <id|title>`.
+- Sheets and Open/Save panels appear inside the parent window's tree; just read state after the action. Standalone
+  dialogs and secondary windows are listed by `wisp windows --app X` and picked with `--window <id|title>`.
 - If targeting by display name fails or is ambiguous, retry with the bundle id from `wisp apps`.
 - Text entry: `wisp set` for fields, `wisp paste` for multi-line or formatted text, `wisp type` for short text at
   the focus. `wisp type` turns newline characters into Return, which sends in chat composers; use `set` or `paste`

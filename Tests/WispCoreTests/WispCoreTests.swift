@@ -239,3 +239,29 @@ final class ProtocolTests: XCTestCase {
         XCTAssertEqual(Policy.from(json: j), p)
     }
 }
+
+final class ErrorTextTests: XCTestCase {
+    func testInterruptionsGetUserFacingText() {
+        XCTAssertEqual(WispError(.userIntervened, "user input detected").userFacingText,
+                       "Wisp stopped because you took control of the mouse or keyboard. Re-read the state before continuing. (userIntervened)")
+        XCTAssertEqual(WispError(.userStoppedSession, "esc").userFacingText,
+                       "Wisp stopped because you pressed Esc or chose Stop in the menu bar. (userStoppedSession)")
+        XCTAssertEqual(WispError(.screenLocked, "locked").userFacingText, "Wisp paused because the screen is locked. (screenLocked)")
+        XCTAssertEqual(WispError(.cancelled, "cancelled by client").userFacingText, "The action was cancelled. (cancelled)")
+        XCTAssertEqual(WispError.userFacingText(for: .cancelled), "The action was cancelled. (cancelled)")
+    }
+
+    func testOtherErrorsKeepTheirText() {
+        for code in WispErrorCode.allCases where ![.userIntervened, .userStoppedSession, .screenLocked, .cancelled].contains(code) {
+            let e = WispError(code, "detail")
+            XCTAssertNil(e.userFacingText, "\(code.name) must not be rewritten")
+            XCTAssertEqual(e.description, "\(code.name): detail")
+        }
+    }
+
+    func testUserFacingTextEndsWithCodeName() {
+        for code in WispErrorCode.allCases {
+            if let t = WispError.userFacingText(for: code) { XCTAssertTrue(t.hasSuffix("(\(code.name))"), t) }
+        }
+    }
+}
