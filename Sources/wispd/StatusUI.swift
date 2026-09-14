@@ -120,7 +120,7 @@ final class StatusUI: NSObject {
     func setMissingPermissions(_ list: [PermissionsMonitor.Permission]) {
         missing = list
         rebuildPermissionItems()
-        item?.button?.image = MenuBarIcon.image(active: activeApp != nil, warning: !list.isEmpty)
+        updateStatusButton()
         item?.button?.toolTip = list.isEmpty ? (activeApp.map { "Wisp is controlling \($0)" } ?? "Wisp computer use")
             : "Wisp needs permissions: " + list.map { $0.title }.joined(separator: ", ")
     }
@@ -175,10 +175,21 @@ final class StatusUI: NSObject {
         }
     }
 
+    private var menuIdleTimer: Timer?
+
     func setActive(app: String?) {
         activeApp = app
         if let m = item?.menu?.item(withTag: 1) { m.title = app.map { "Wisp: controlling \($0)" } ?? "Wisp: idle" }
-        item?.button?.image = MenuBarIcon.image(active: app != nil, warning: !missing.isEmpty)
+        updateStatusButton()
+        menuIdleTimer?.invalidate()
+        if app != nil {
+            // Return the menu bar to the idle glyph if no further action arrives; a running task re-arms this each step.
+            menuIdleTimer = Timer.scheduledTimer(withTimeInterval: 12, repeats: false) { [weak self] _ in
+                Task { @MainActor in guard let self else { return }; self.activeApp = nil
+                    if let m = self.item?.menu?.item(withTag: 1) { m.title = "Wisp: idle" }
+                    self.updateStatusButton(); self.item?.button?.toolTip = "Wisp computer use" }
+            }
+        }
         item?.button?.toolTip = app.map { "Wisp is controlling \($0)" } ?? "Wisp computer use"
         if app != nil, bannerEnabled {
             touch()
@@ -186,6 +197,30 @@ final class StatusUI: NSObject {
             hideTimer?.invalidate()
             banner.orderOut(nil)
         }
+    }
+
+    /// Reflects the controlled app in the menu bar itself: the Wisp glyph, then the app's name (and icon when known),
+    /// so the user can see at a glance which app Wisp is driving. Idle shows just the glyph.
+    private func updateStatusButton() {
+        guard let button = item?.button else { return }
+        let active = activeApp != nil
+        button.image = MenuBarIcon.image(active: active, warning: !missing.isEmpty)
+        button.image?.isTemplate = true
+        if let app = activeApp {
+            button.title = " " + shortName(app)
+            button.imagePosition = .imageLeading
+            button.font = .systemFont(ofSize: 12, weight: .semibold)
+            button.image?.accessibilityDescription = "Wisp is controlling \(app)"
+        } else {
+            button.title = ""
+            button.imagePosition = .imageOnly
+        }
+    }
+
+    /// Trims a long app or target name so the menu bar item stays compact.
+    private func shortName(_ s: String) -> String {
+        let base = s.hasSuffix(" tab") || s == "Chrome tab" ? "Chrome" : s
+        return base.count > 18 ? String(base.prefix(17)) + "…" : base
     }
 }
 
