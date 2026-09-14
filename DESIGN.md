@@ -805,6 +805,56 @@ fed with CDP nodes), keep **C** for when "take over my open tab" becomes a hard 
 
 ---
 
+### 2.12 Parity additions (implemented in 0.1.0)
+
+An audit of everything the Codex app ships for Computer Use (its per-app instruction resources, the model-facing
+skill, the JS REPL contract, the Chrome plugin docs, the daemon binary and its UX affordances) produced the
+following additions. Each mirrors a Codex mechanism; none copies Codex text or artwork.
+
+- **Per-app instructions** (`Resources/AppInstructions/*.md`, `Sources/WispCore/Instructions.swift`). Codex keeps
+  `AppInstructions/<Name>.md` inside `Package_ComputerUse.bundle`, looks them up by a candidate list (override
+  stems, `CFBundleName`, bundle id), concatenates every match with a blank line, skips empty files, prepends a
+  "Browser Computer Use" block for any app whose `Info.plist` registers the `http` URL scheme, and delivers the
+  result once per app inside `<app_specific_instructions>`. Wisp does the same with files keyed primarily by bundle
+  id (locale-proof), generated into `BuiltinInstructions.swift` by `scripts/gen-instructions.sh`, linted by
+  `scripts/lint-instructions.sh`, overridable from `~/.config/wisp/instructions/<stem>.md`, with
+  `instructionsMode` merge|replace|off, `--instructions`/`--no-instructions`, and `wisp instructions list|show`.
+- **Model guidance** (`skills/wisp/SKILL.md`, `skills/wisp/references/confirmations.md`). The Codex skill's rules
+  (tool choice, re-read discipline, no-change handling, screenshot-only observation, app resolution and retry,
+  newline hazard in composers, settle policy, interruption phrasing) and its four-tier confirmation policy are
+  restated in Wisp terms.
+- **Approval with risk tiers** (`Sources/WispCore/Approval.swift`, `Sources/wispd/ApprovalUI.swift`). Codex runs
+  every app-targeting call through a policy that answers allowed | denied | forbidden with a risk level and an
+  elicitation ("Allow Computer Use to use X?") that can persist for the session or always. Wisp keeps a forbidden
+  set that no allow entry can override, a high-risk list that prompts, grants in `~/.config/wisp/approvals.json`
+  (session grants are bound to the daemon pid), and a URL host blocklist raising `blockedURL`.
+- **Observing indicator** (`Sources/wispd/LensOverlay.swift`). Codex's cursor carries an ActivityState
+  idle | loading | paused and plays a 45-frame lens animation while the daemon captures state. Wisp draws an
+  original Core Animation lens (ring, sweeping arc, glow) beside the cursor or at the target window's corner,
+  driven by `WispActivity` idle | observing | acting | paused; `wisp status` reports the activity.
+- **Lock-screen monitor** (`Sources/wispd/LockScreenMonitor.swift`). Codex fails actions with `screenLocked` and
+  hides its overlay. Wisp subscribes to the lock/unlock notifications, cancels the in-flight action, hides the
+  overlays and resets revisions on unlock. Codex's guardian app and SecurityAgent authorization plugin, which keep
+  a task alive across a lock cycle, are deliberately not replicated: they need a privileged installer and sit
+  outside Wisp's trust model.
+- **Chrome behaviors** (`Sources/wispd/CDP.swift`). From the Codex chrome plugin docs: file-chooser interception
+  and `DOM.setFileInputFiles` (`wisp chrome upload`), `Page.handleJavaScriptDialog` (`wisp chrome dialog`), agent
+  tabs closed at turn end unless marked deliverable or handoff (`wisp chrome mark`, marks are turn-scoped), and
+  background-by-default browsing with explicit `show`/`hide`.
+- **Background launch and turn end.** `get_app_state` in Codex launches apps transparently in the background and
+  the REPL exposes `turn_ended`; Wisp's `wisp launch` and MCP `wisp_launch` now default to the background,
+  `wisp_turn_end` ends everything, and MCP `notifications/cancelled` cancels the running action.
+
+Deliberately deferred, with the evidence that informed the decision:
+
+- **Capture sound.** `Package_Appshot.bundle/Appshot.wav` belongs to Appshot, the user-initiated "attach an app
+  screenshot" feature (its strings describe the + menu and the double-Command shortcut); Computer Use captures are
+  silent. Wisp stays silent.
+- **Computer History (Skysight).** A passive activity recorder with 10-minute and 6-hour LLM summaries, hardened
+  against prompt injection, with observation rules and pause/clear controls. It is a memory feature rather than a
+  driving feature and carries privacy weight; it is a separate, opt-in milestone.
+- **Loopback audio recording** (`SKY_ENABLE_AUDIO`) and **record-and-replay** prompt templates: niche, later.
+
 ## Appendix A. Evidence index
 
 ```

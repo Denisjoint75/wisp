@@ -185,6 +185,8 @@ actor Daemon {
         case Proto.Method.appLaunch:
             let spec = try TargetSpec.parse(params)
             guard case .app(let name, _) = spec else { throw WispError(.invalidParams, "launch needs an app") }
+            // A locked screen cannot show a window: refuse before starting a process that would then hang around.
+            try checkScreenLock()
             let s = try await session(for: name, launch: true, activate: params["activate"].bool ?? true)
             return ["result": ["app": s.info.json, "windows": .array(AppResolver.windows(of: s.app).map { $0.json })]]
         case Proto.Method.appActivate:
