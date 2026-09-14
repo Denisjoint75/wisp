@@ -108,8 +108,10 @@ for xpc in "$FW"/XPCServices/*.xpc; do "${SIGN[@]}" --preserve-metadata=entitlem
 "${SIGN[@]}" "$FW/Autoupdate"
 "${SIGN[@]}" "$FW/Updater.app"
 "${SIGN[@]}" "$APP/Contents/Frameworks/Sparkle.framework"
-"${SIGN[@]}" --identifier sb.moe.wisp "$APP/Contents/MacOS/wispd"
+# Sign the nested CLI helper first: signing the main executable (wispd) or the bundle seals the whole app and
+# requires every other Mach-O in Contents/MacOS to be signed already.
 "${SIGN[@]}" --identifier sb.moe.wisp.cli "$APP/Contents/MacOS/wisp"
+"${SIGN[@]}" --identifier sb.moe.wisp "$APP/Contents/MacOS/wispd"
 "${SIGN[@]}" --identifier sb.moe.wisp "$APP"
 "${SIGN[@]}" --identifier sb.moe.wisp.cli "$OUT/wisp"
 codesign --verify --deep --strict "$APP"
