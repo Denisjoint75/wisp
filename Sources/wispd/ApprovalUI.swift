@@ -47,21 +47,68 @@ enum ApprovalUI {
         alert.window.level = .floating
         alert.window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
 
+        let timeout = ApprovalUI.timeout
         return await withCheckedContinuation { (cont: CheckedContinuation<ApprovalChoice, Never>) in
-            var finished = false
-            let watchdog = Task { @MainActor in
+            let state = PromptState()
+            // Fail closed: if the main queue never gets to run the alert (a wedged main thread), answer `deny` after
+            // the timeout instead of leaving the caller hanging. Runs off the main actor on purpose.
+            let fallback = Task.detached {
                 try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
-                guard !Task.isCancelled, !finished else { return }
-                NSApp.abortModal()
+                if state.resumeIfNeverStarted() { cont.resume(returning: .deny) }
             }
             // Run the modal loop from a fresh main-queue turn rather than inside the executor job that got us here.
             DispatchQueue.main.async {
+                guard state.markStarted() else { return } // the fallback already answered; never show the alert
+                // The watchdog counts from the moment the alert actually starts, not from when it was queued.
+                let watchdog = Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                    guard !Task.isCancelled, !state.finished else { return }
+                    NSApp.abortModal()
+                }
                 let response = alert.runModal()
-                finished = true
+                state.finished = true
                 watchdog.cancel()
+                fallback.cancel()
                 alert.window.orderOut(nil)
-                cont.resume(returning: choice(for: response))
+                if state.resumeAfterStart() { cont.resume(returning: choice(for: response)) }
             }
+        }
+    }
+
+    /// Lifecycle flags for one prompt, shared between the main-queue block and the detached fallback.
+    private final class PromptState: @unchecked Sendable {
+        private let lock = NSLock()
+        private var started = false
+        private var resumed = false
+        private var _finished = false
+
+        var finished: Bool {
+            get { lock.lock(); defer { lock.unlock() }; return _finished }
+            set { lock.lock(); _finished = newValue; lock.unlock() }
+        }
+
+        /// Marks the alert as started; false when the fallback already resumed the continuation.
+        func markStarted() -> Bool {
+            lock.lock(); defer { lock.unlock() }
+            if resumed { return false }
+            started = true
+            return true
+        }
+
+        /// Claims the continuation for the fallback, only if the alert never started.
+        func resumeIfNeverStarted() -> Bool {
+            lock.lock(); defer { lock.unlock() }
+            if started || resumed { return false }
+            resumed = true
+            return true
+        }
+
+        /// Claims the continuation for the alert's own result.
+        func resumeAfterStart() -> Bool {
+            lock.lock(); defer { lock.unlock() }
+            if resumed { return false }
+            resumed = true
+            return true
         }
     }
 

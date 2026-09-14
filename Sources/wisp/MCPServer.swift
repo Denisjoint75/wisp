@@ -114,6 +114,9 @@ final class MCPServer {
             do {
                 let content = try call(tool: name, args: args)
                 write(Proto.result(id: id, ["content": .array(content)]))
+            } catch let e as WispError where e.code == .appNotAllowed || e.code == .blockedURL {
+                // A refusal is a plain message for the model: the app is off limits or the user said no.
+                write(Proto.result(id: id, ["content": [["type": "text", "text": .string(e.message)]], "isError": true]))
             } catch let e as WispError {
                 write(Proto.result(id: id, ["content": [["type": "text", "text": .string("error \(e.code.name): \(e.message)" + (e.data.map { "\n" + $0.stringified(pretty: true) } ?? ""))]], "isError": true]))
             } catch {
@@ -208,7 +211,8 @@ final class MCPServer {
             if !r["state"].isNull { out.append(contentsOf: stateContent(r["state"])) }
             return out
         case "wisp_launch":
-            let r = try client.call(Proto.Method.appLaunch, ["app": args["app"], "activate": true], timeout: 60)
+            // Launching may wait for the user's approval prompt (up to 120 s), so this needs the long timeout.
+            let r = try client.call(Proto.Method.appLaunch, ["app": args["app"], "activate": true], timeout: 300)
             return [["type": "text", "text": .string(r.stringified(pretty: true))]]
         case "wisp_end":
             var p: [String: JSON] = [:]
@@ -253,6 +257,6 @@ final class MCPServer {
     }
 
     static let instructions = """
-    Wisp controls macOS apps through accessibility and Chrome tabs through DevTools. Workflow: wisp_state (reads an indexed tree) → act with wisp_click/wisp_set/wisp_key/... (each returns the new state diff) → repeat. Always use indices from the latest state. Prefer wisp_set for text fields and wisp_paste for long/multi-line text. Ask the user before irreversible or outward-facing actions (sending, deleting, paying, logging in, changing settings). If a result says "user input detected", stop and re-read state.
+    Wisp controls macOS apps through accessibility and Chrome tabs through DevTools. Workflow: wisp_state (reads an indexed tree) → act with wisp_click/wisp_set/wisp_key/... (each returns the new state diff) → repeat. Always use indices from the latest state. Prefer wisp_set for text fields and wisp_paste for long/multi-line text. Ask the user before irreversible or outward-facing actions (sending, deleting, paying, logging in, changing settings). If a result says "user input detected", stop and re-read state. Some apps (System Settings, Terminal, Mail, ...) require the user to approve in a Wisp prompt on screen before the first call succeeds; if a tool reports that the user declined or that an app is forbidden or denied by policy, do not retry, tell the user.
     """
 }

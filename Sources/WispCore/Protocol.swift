@@ -20,6 +20,8 @@ public enum Proto {
         public static let sessionStatus = "session.status"
         public static let policyGet = "policy.get"
         public static let policySet = "policy.set"
+        public static let approvalsList = "approvals.list"
+        public static let approvalsClear = "approvals.clear"
         public static let chromeStatus = "chrome.status"
         public static let chromeLaunch = "chrome.launch"
         public static let chromeTabs = "chrome.tabs"

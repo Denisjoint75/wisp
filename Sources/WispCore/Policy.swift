@@ -26,13 +26,27 @@ public struct Policy: Equatable {
     public var bannerText: String
     /// Suffix appended to the banner while Wisp is observing (reading the UI); empty disables it.
     public var bannerHint: String
+    /// When the daemon asks the user before controlling an app: `off` (never), `high-risk` (apps matching
+    /// `highRisk`) or `all` (every app; high-risk ones get the stronger warning). See `ApprovalRules.Mode`.
+    public var approval: String
+    /// Apps that prompt with the high-risk warning (globs against bundle id and name; see `ApprovalRules`).
+    public var highRisk: [String]
+    /// Apps Wisp never controls, whatever the allow list or stored grants say. The built-in entries
+    /// (`ApprovalRules.defaultForbidden`) are always in effect; this list can only add to them.
+    public var forbidden: [String]
+    /// URL hosts Chrome tabs may not open and whose web content is refused inside app windows (see
+    /// `ApprovalRules.isBlocked(url:hosts:)`; written in punycode, `example.com` also covers its subdomains).
+    public var blockedURLs: [String]
 
     public static let instructionsModes = ["merge", "replace", "off"]
+    /// Accepted `approval` values, in `ApprovalRules.Mode` order.
+    public static let approvalModes = ["off", "high-risk", "all"]
 
+    /// Password managers. Apple's own sensitive apps are covered by the approval tiers instead: Terminal, Keychain
+    /// Access and Passwords prompt as high risk, the login window and SecurityAgent are forbidden outright.
     public static let defaultDeny = [
         "com.bitwarden.desktop", "com.1password.1password", "com.agilebits.onepassword7", "com.agilebits.onepassword-osx",
-        "com.dashlane.dashlanephonefinal", "com.nordsec.nordpass", "com.lastpass.lastpassmacdesktop", "com.apple.keychainaccess",
-        "com.apple.Passwords", "com.apple.loginwindow", "com.apple.SecurityAgent", "com.apple.Terminal",
+        "com.dashlane.dashlanephonefinal", "com.nordsec.nordpass", "com.lastpass.lastpassmacdesktop",
     ]
 
     public init() {
@@ -55,6 +69,10 @@ public struct Policy: Equatable {
         lensEnabled = true
         bannerText = BannerTemplate.defaultText
         bannerHint = BannerTemplate.defaultHint
+        approval = "high-risk"
+        highRisk = ApprovalRules.defaultHighRisk
+        forbidden = ApprovalRules.defaultForbidden
+        blockedURLs = []
     }
 
     public var json: JSON {
@@ -65,7 +83,8 @@ public struct Policy: Equatable {
          "interventionDebounce": .number(interventionDebounce), "bannerEnabled": .bool(bannerEnabled),
          "chromePort": .int(chromePort), "maxChildren": .int(maxChildren), "privateWindowField": .bool(privateWindowField),
          "instructionsMode": .string(instructionsMode), "lensEnabled": .bool(lensEnabled), "bannerText": .string(bannerText),
-         "bannerHint": .string(bannerHint)]
+         "bannerHint": .string(bannerHint), "approval": .string(approval), "highRisk": .array(highRisk.map { .string($0) }),
+         "forbidden": .array(forbidden.map { .string($0) }), "blockedURLs": .array(blockedURLs.map { .string($0) })]
     }
 
     public static func from(json j: JSON) -> Policy {
@@ -89,7 +108,30 @@ public struct Policy: Equatable {
         if let b = j["lensEnabled"].bool { p.lensEnabled = b }
         if let s = j["bannerText"].string, !s.trimmingCharacters(in: .whitespaces).isEmpty { p.bannerText = s }
         if let s = j["bannerHint"].string { p.bannerHint = s }
+        if let m = j["approval"].string?.lowercased(), Policy.approvalModes.contains(m) { p.approval = m }
+        if let a = j["highRisk"].stringArray { p.highRisk = a }
+        if let a = j["forbidden"].stringArray { p.forbidden = a }
+        if let a = j["blockedURLs"].stringArray { p.blockedURLs = a }
         return p
+    }
+
+    /// The approval rule set the daemon enforces: `approval`/`highRisk`/`forbidden`/`blockedURLs` plus the
+    /// `allow`/`deny` lists. The built-in forbidden entries are always included so neither the policy file nor a
+    /// stored grant can make Wisp control itself or the login window.
+    public var approvalRules: ApprovalRules {
+        var forbid = ApprovalRules.defaultForbidden
+        for f in forbidden where !forbid.contains(f) { forbid.append(f) }
+        return ApprovalRules(mode: Policy.approvalMode(approval), highRisk: highRisk, forbidden: forbid, allow: allow, deny: deny,
+                             blockedURLHosts: blockedURLs)
+    }
+
+    /// Maps a policy `approval` string to the rule mode; unknown values fall back to the default (`high-risk`).
+    public static func approvalMode(_ s: String) -> ApprovalRules.Mode {
+        switch s.lowercased() {
+        case "off": return .off
+        case "all": return .all
+        default: return .highRisk
+        }
     }
 
     public static func load(path: String = WispPaths.policyPath) -> Policy {

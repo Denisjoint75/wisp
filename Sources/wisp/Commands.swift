@@ -254,8 +254,38 @@ enum Commands {
                         default: throw WispError(.invalidParams, "--lens must be on or off")
                         }
                     }
+                    if let m = a.value("approval") {
+                        guard Policy.approvalModes.contains(m.lowercased()) else { throw WispError(.invalidParams, "--approval must be off, high-risk or all") }
+                        p["approval"] = .string(m.lowercased())
+                    }
+                    // Repeatable list flags replace the whole list; a single empty value clears it.
+                    for (flag, key) in [("high-risk", "highRisk"), ("forbid", "forbidden"), ("block-url", "blockedURLs")] where !a.values(flag).isEmpty {
+                        p[key] = .array(a.values(flag).filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }.map { .string($0) })
+                    }
                     result = try client.call(Proto.Method.policySet, p)
                 } else { throw WispError(.invalidParams, "policy get|set") }
+            case "approvals":
+                switch a.rest.first ?? "list" {
+                case "list":
+                    result = try client.call(Proto.Method.approvalsList)
+                    if !out.json {
+                        let grants = result["grants"].array ?? []
+                        if grants.isEmpty { print("no approvals (\(result["path"].string ?? ""))") }
+                        for g in grants {
+                            var line = "\(g["app"].string ?? "")  \(g["grant"].string ?? "")"
+                            if let at = g["grantedAt"].string { line += "  since \(at)" }
+                            if g["active"].bool == false { line += "  (from an earlier daemon; inactive)" }
+                            print(line)
+                        }
+                        return 0
+                    }
+                case "clear":
+                    var p: JSON = [:]
+                    if let app = a.value("app", "a") { p["app"] = .string(app) }
+                    result = try client.call(Proto.Method.approvalsClear, p)
+                    if !out.json { print(a.value("app", "a").map { "approval for \($0) removed" } ?? "approvals cleared"); return 0 }
+                default: throw WispError(.invalidParams, "approvals list | clear [--app X]")
+                }
             case "instructions":
                 guard a.rest.first == "show" else { throw WispError(.invalidParams, "instructions list | show --app X") }
                 result = try client.call(Proto.Method.appInstructions, try target(a)); kind = "instructions"
@@ -438,7 +468,10 @@ enum Commands {
     Session & daemon
       wisp cancel | end [--app X] | status | log
       wisp policy get | set [--allow ID ...] [--deny ID ...] [--instructions-mode merge|replace|off]
-                            [--banner-text "✦ Wisp is controlling {app}"] [--banner-hint reading] [--lens on|off] ...
+                            [--banner-text "✦ Wisp is controlling {app}"] [--banner-hint reading] [--lens on|off]
+                            [--approval off|high-risk|all] [--high-risk PATTERN ...] [--forbid PATTERN ...]
+                            [--block-url HOST ...]        list flags replace the list; one empty value clears it
+      wisp approvals list | clear [--app X]      per-app approvals the user granted from the prompt
       wisp doctor [--request-permissions]        wisp daemon start|stop|restart|status|log
       wisp mcp                                   MCP stdio server exposing the same tools
       wisp --json ... for machine-readable output

@@ -39,6 +39,10 @@ actor Daemon {
 
     nonisolated let cancelToken = CancelToken()
     private(set) var policy = Policy.load()
+    /// Per-app approvals the user granted from the prompt (`~/.config/wisp/approvals.json`).
+    private let approvals = ApprovalStore(url: URL(fileURLWithPath: WispPaths.approvalsPath))
+    /// App the approval prompt is currently up for, reported by `session.status`.
+    private var approvalPending: String?
     private var sessions: [pid_t: AppSession] = [:]
     private var chrome: ChromeBackend
     private var activeLabel: String?
@@ -59,6 +63,7 @@ actor Daemon {
 
     private init() {
         chrome = ChromeBackend(port: Policy.load().chromePort)
+        approvals.onError = { Log.error($0) }
     }
 
     // MARK: Lifecycle
@@ -269,6 +274,7 @@ actor Daemon {
         case Proto.Method.sessionStatus:
             let activity = await MainActor.run { CursorOverlay.shared.activity }
             return ["result": ["active": activeLabel.map { .string($0) } ?? .null, "busy": .bool(busy),
+                               "approvalPending": approvalPending.map { .string($0) } ?? .null,
                                "activity": .string(activity.rawValue), "screenLocked": .bool(LockScreenMonitor.shared.isLocked),
                                "sessions": .array(sessions.values.map { $0.info.json }),
                                "intervention": interventionAt.map { .string(ISO8601DateFormatter().string(from: $0)) } ?? .null,
@@ -290,6 +296,26 @@ actor Daemon {
                 StatusUI.shared.bannerHint = p.bannerHint
             }
             return ["result": policy.json]
+        case Proto.Method.approvalsList:
+            approvals.reload()
+            let pid = getpid()
+            let grants: [JSON] = approvals.list().map { g in
+                let active = g.grant == .always || approvals.grant(for: g.bundleId, daemonPid: pid) == .session
+                return [String: JSON].compact([("app", .string(g.bundleId)), ("grant", .string(g.grant.rawValue)), ("active", .bool(active)),
+                                               ("grantedAt", approvals.grantedAt(g.bundleId).map { .string(ISO8601DateFormatter().string(from: $0)) })])
+            }
+            return ["result": ["path": .string(WispPaths.approvalsPath), "daemonPid": .int(Int(pid)), "grants": .array(grants)]]
+        case Proto.Method.approvalsClear:
+            let ok: Bool
+            if let app = params["app"].string, !app.isEmpty {
+                Log.info("approvals: revoking \(app)")
+                ok = approvals.revoke(app)
+            } else {
+                Log.info("approvals: clearing all grants")
+                ok = approvals.clear()
+            }
+            guard ok else { throw WispError(.internalError, "could not write \(WispPaths.approvalsPath); see `wisp daemon log`") }
+            return ["result": ["ok": true, "grants": .array(approvals.list().map { ["app": .string($0.bundleId), "grant": .string($0.grant.rawValue)] })]]
         case Proto.Method.chromeStatus:
             let v = try? await chrome.version()
             let tabs = (try? await chrome.listTabs()) ?? []
@@ -304,6 +330,7 @@ actor Daemon {
         case Proto.Method.chromeTabs:
             return ["result": .array(try await chrome.listTabs().map { $0.json })]
         case Proto.Method.chromeTabNew:
+            if let u = params["url"].string { try checkBlockedURL(u) }
             let t = try await chrome.newTab(url: params["url"].string)
             if params["url"].string != nil {
                 if let tab = try? await chrome.tab(t.id) { await tab.waitForQuiet(min: 0.3, quiet: policy.settleQuiet, max: policy.settleMax) }
@@ -312,6 +339,7 @@ actor Daemon {
         case Proto.Method.chromeTabGoto:
             let tab = try await chrome.tab(params["tab"].string ?? "active")
             guard let url = params["url"].string else { throw WispError(.invalidParams, "goto needs `url`") }
+            try checkBlockedURL(url)
             try await tab.navigate(url)
             await tab.waitForQuiet(min: 0.3, quiet: policy.settleQuiet, max: policy.settleMax)
             let state = (params["observe"].bool ?? true) ? try await captureState(.tab(tab), options: StateOptions.parse(params)) : .null
@@ -350,7 +378,7 @@ actor Daemon {
 
     private func session(for spec: String, launch: Bool, activate: Bool) async throws -> AppSession {
         if let app = try AppResolver.findRunning(spec) {
-            return try makeSession(app)
+            return try await makeSession(app)
         }
         guard launch else { throw WispError(.appNotFound, "app `\(spec)` is not running") }
         guard let url = try AppResolver.findInstalled(spec) else {
@@ -359,12 +387,11 @@ actor Daemon {
         let bundle = Bundle(url: url)
         let bid = bundle?.bundleIdentifier
         let name = bundle?.infoDictionary?["CFBundleDisplayName"] as? String ?? bundle?.infoDictionary?["CFBundleName"] as? String ?? url.deletingPathExtension().lastPathComponent
-        if policy.decision(bundleId: bid, name: name, path: url.path) == .denied {
-            throw WispError(.appNotAllowed, "policy denies controlling \(name)")
-        }
+        // Ask before launching: a denied or declined app must not be started at all.
+        try await authorize(bundleId: bid, name: name, path: url.path)
         Log.info("launching \(url.path)")
         let app = try await AppResolver.launch(url: url, activate: activate && !policy.usesBackground(bundleId: bid, name: name))
-        let s = try makeSession(app)
+        let s = try await makeSession(app, authorized: true)
         // wait for a window
         for _ in 0..<80 {
             if !AppResolver.windows(of: app).isEmpty { break }
@@ -373,12 +400,15 @@ actor Daemon {
         return s
     }
 
-    private func makeSession(_ app: NSRunningApplication) throws -> AppSession {
+    /// Returns the session for a running app, creating it after the approval check. `authorized` skips the check
+    /// when the caller already ran it for this launch. A session that survived (until `wisp end` or the daemon
+    /// exits) is reused without asking again, which is what "Allow Once" grants.
+    private func makeSession(_ app: NSRunningApplication, authorized: Bool = false) async throws -> AppSession {
         if let s = sessions[app.processIdentifier], !app.isTerminated { return s }
         let info = AppResolver.info(for: app)
-        if policy.decision(bundleId: info.bundleId, name: info.name, path: info.path) == .denied {
-            throw WispError(.appNotAllowed, "policy denies controlling \(info.name) (\(info.bundleId ?? "?")); edit \(WispPaths.policyPath)")
-        }
+        if !authorized { try await authorize(bundleId: info.bundleId, name: info.name, path: info.path) }
+        // Another request may have created the session while the prompt was up.
+        if let s = sessions[app.processIdentifier], !app.isTerminated { return s }
         let s = AppSession(app: app, background: policy.usesBackground(bundleId: info.bundleId, name: info.name))
         sessions[app.processIdentifier] = s
         AXNotificationHub.shared.observe(pid: app.processIdentifier)
@@ -387,6 +417,70 @@ actor Daemon {
         }
         return s
     }
+
+    // MARK: Approval
+
+    /// Applies the policy's approval rules to an app, prompting the user when required. Throws `appNotAllowed` for
+    /// forbidden, denied and declined apps; records `session`/`always` grants in the approval store. The daemon
+    /// actor stays free while the prompt is up (the alert runs on the main thread), so status and cancel calls keep
+    /// working; `busy` is untouched because no action is in flight yet.
+    private func authorize(bundleId: String?, name: String, path: String?) async throws {
+        let key = bundleId ?? name
+        let pid = getpid()
+        let label = bundleId.map { "\(name) (\($0))" } ?? name
+        approvals.reload() // pick up edits made by `wisp approvals` from another daemon or by hand
+        let decision = policy.approvalRules.decide(bundleId: bundleId, name: name, grant: approvals.grant(for: key, daemonPid: pid))
+        switch decision {
+        case .allowed:
+            Log.debug("approval: \(label) allowed")
+        case .forbidden(let reason):
+            Log.warn("approval: refused \(label): \(reason)")
+            throw WispError(.appNotAllowed, "Wisp will not control \(name): it is on the forbidden list for safety")
+        case .denied(let reason):
+            Log.warn("approval: refused \(label): \(reason)")
+            throw WispError(.appNotAllowed, "policy denies controlling \(label); to allow it run `wisp policy set --allow <pattern>` (allow entries beat deny) or edit the deny list in \(WispPaths.policyPath)")
+        case .needsApproval(let risk, let subtitle):
+            Log.info("approval: asking the user about \(label) (risk \(risk.rawValue))")
+            let icon = path.map { NSWorkspace.shared.icon(forFile: $0) }
+            approvalPending = label
+            let choice = await ApprovalUI.ask(appName: name, bundleId: bundleId, icon: icon, risk: risk, subtitle: subtitle)
+            approvalPending = nil
+            Log.info("approval: user chose \(choice) for \(label)")
+            switch choice {
+            case .deny:
+                throw WispError(.appNotAllowed, "the user declined to let Wisp control \(name)")
+            case .once:
+                break
+            case .session:
+                if !approvals.grant(.session, for: key, daemonPid: pid) { Log.warn("approval: session grant for \(label) is not persisted") }
+            case .always:
+                if !approvals.grant(.always, for: key, daemonPid: pid) { Log.warn("approval: always grant for \(label) is not persisted") }
+            }
+        }
+    }
+
+    /// Throws `blockedURL` when the URL's host is on the policy's blocked list.
+    private func checkBlockedURL(_ url: String) throws {
+        if ApprovalRules.isBlocked(url: url, hosts: policy.blockedURLs) {
+            let host = ApprovalRules.host(of: url) ?? url
+            Log.warn("blocked URL \(url) (host \(host))")
+            throw WispError(.blockedURL, "\(host) is blocked by policy")
+        }
+    }
+
+    /// The window's web content node when its URL is blocked: the root itself if it carries a URL, otherwise the
+    /// first `web` descendant. Returns the node and the blocked host.
+    private func blockedWebNode(in root: UINode) -> (node: UINode, host: String)? {
+        guard !policy.blockedURLs.isEmpty else { return nil }
+        var web: UINode? = root.url.map { _ in root }
+        if web == nil {
+            root.walk { n, _ in if web == nil, n.role == "web", let u = n.url, !u.isEmpty { web = n } }
+        }
+        guard let node = web, let url = node.url, ApprovalRules.isBlocked(url: url, hosts: policy.blockedURLs) else { return nil }
+        return (node, ApprovalRules.host(of: url) ?? url)
+    }
+
+    static let blockedPageNote = "# This page's host is blocked by policy; actions inside it are refused."
 
     private func endSession(_ s: AppSession) {
         AXNotificationHub.shared.stop(pid: s.pid)
@@ -515,6 +609,11 @@ actor Daemon {
                                                return shot
                                            })
         if busyIndicator { result["text"] = .string((result["text"].string ?? "") + "\n# not settled (busy indicator visible)") }
+        if let blocked = blockedWebNode(in: root) {
+            Log.warn("\(s.displayName) shows blocked host \(blocked.host)")
+            result["text"] = .string(Daemon.blockedPageNote + "\n" + (result["text"].string ?? ""))
+            result["blockedHost"] = .string(blocked.host)
+        }
         return result
     }
 
@@ -542,7 +641,11 @@ actor Daemon {
         // targeted; clicking one scrolls it into view first. Dropping them would hide most of a long form.
         tOpts.dropOffscreen = false
         let root = TreeTransform.apply(snap.root, options: tOpts)
-        let header = "# Chrome tab \(t.id.prefix(8)) — \"\(snap.title)\" \(snap.url) (viewport \(Int(snap.viewport.width))x\(Int(snap.viewport.height)))"
+        var header = "# Chrome tab \(t.id.prefix(8)) — \"\(snap.title)\" \(snap.url) (viewport \(Int(snap.viewport.width))x\(Int(snap.viewport.height)))"
+        if ApprovalRules.isBlocked(url: snap.url, hosts: policy.blockedURLs) {
+            Log.warn("Chrome tab \(t.id.prefix(8)) is on blocked host \(ApprovalRules.host(of: snap.url) ?? snap.url)")
+            header = Daemon.blockedPageNote + "\n" + header
+        }
         var instructions: String? = nil
         if options.instructions ?? !t.instructionsShown {
             // A DevTools tab is a browser surface: the `_browser` block comes first, then the tab-specific text.
@@ -784,6 +887,14 @@ actor Daemon {
 
     private func performApp(_ s: AppSession, window w: WindowInfo, action: UIAction, params: JSON) async throws {
         setActive(s.displayName)
+        if let el = action.elementIndex, let rev = s.revisions.latest, let blocked = blockedWebNode(in: rev.root), let n = rev.node(at: el) {
+            var inside = Set<String>()
+            blocked.node.walk { node, _ in inside.insert(node.identity) }
+            if inside.contains(n.identity) {
+                Log.warn("refusing \(action.kind) on element [\(el)] of \(s.displayName): inside blocked host \(blocked.host)")
+                throw WispError(.blockedURL, "\(blocked.host) is blocked by policy; element [\(el)] is inside that page")
+            }
+        }
         let delivery: Delivery = params["delivery"].string == "hid" ? .hid : .pid(s.pid)
         let space = params["space"].string
         // Operate in place by default: never raise the window or steal the user's focus. A synthetic app-activation
@@ -986,6 +1097,11 @@ actor Daemon {
 
     private func performTab(_ t: ChromeTab, action: UIAction, params: JSON) async throws {
         setActive("Chrome tab")
+        if ApprovalRules.isBlocked(url: t.info.url, hosts: policy.blockedURLs) {
+            let host = ApprovalRules.host(of: t.info.url) ?? t.info.url
+            Log.warn("refusing \(action.kind) in Chrome tab \(t.id.prefix(8)): blocked host \(host)")
+            throw WispError(.blockedURL, "\(host) is blocked by policy; the tab is on that host")
+        }
         let cursor = await MainActor.run { CursorOverlay.shared }
         let useCursor = policy.cursorEnabled && (params["cursor"].bool ?? true)
         let space = params["space"].string

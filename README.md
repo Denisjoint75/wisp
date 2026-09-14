@@ -152,10 +152,18 @@ merge|replace|off`) to choose whether user files merge with, replace, or switch 
 - **Settle:** `AXObserver` notifications plus busy flags; a quiet window of 0.3 s after at least 0.25 s, up to 5 s.
   A visible progress or busy indicator in the window keeps the wait going (the state is then marked not settled).
 - **Safety:** listen-only event tap for Esc and real user input (`userIntervened`), policy file
-  `~/.config/wisp/policy.json` (deny list defaults to password managers), secure fields are never read or typed
-  into unless allowed, screen-lock check before every action and batch step plus a lock monitor that cancels an
-  in-flight action the moment the screen locks (`wisp status` shows `screenLocked`), display kept awake while a
-  session runs.
+  `~/.config/wisp/policy.json`, secure fields are never read or typed into unless allowed, screen-lock check
+  before every action and batch step plus a lock monitor that cancels an in-flight action the moment the screen
+  locks (`wisp status` shows `screenLocked`), display kept awake while a session runs.
+- **Per-app approval:** apps come in tiers. Password managers are denied by default (`deny`); the login window,
+  the authentication agent and Wisp itself are forbidden and cannot be allowed at all; high-risk apps (System
+  Settings, Terminal, Keychain Access, Passwords, Mail, Messages, Finder) show an on-screen prompt the first time
+  an agent touches them, with *Allow Once*, *Allow for This Session*, *Always Allow* and *Don't Allow*
+  (the prompt closes as *Don't Allow* after 120 s). `wisp policy set --approval off|high-risk|all` picks when to
+  ask (`all` prompts for every app), `--high-risk`/`--forbid` edit the lists, `wisp approvals list|clear` manages
+  stored grants (`~/.config/wisp/approvals.json`). `--block-url HOST ...` refuses `wisp chrome new/goto` to those
+  hosts (subdomains included, punycode for internationalized names) and refuses actions inside a native window
+  whose web content shows one of them.
 - **Chrome:** `Accessibility.getFullAXTree` + `DOMSnapshot.captureSnapshot` rendered by the same engine;
   `Input.dispatch*` for actions; `Page.captureScreenshot`; `Runtime.evaluate` for `wisp chrome eval`.
 

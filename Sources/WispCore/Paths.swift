@@ -25,6 +25,7 @@ public enum WispPaths {
     public static var logPath: String { supportDir.appendingPathComponent("wispd.log").path }
     public static var pidPath: String { supportDir.appendingPathComponent("wispd.pid").path }
     public static var policyPath: String { configDir.appendingPathComponent("policy.json").path }
+    public static var approvalsPath: String { configDir.appendingPathComponent("approvals.json").path }
     public static var instructionsDir: URL { configDir.appendingPathComponent("instructions", isDirectory: true) }
 
     public static var screenshotDir: URL {

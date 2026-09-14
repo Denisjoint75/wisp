@@ -31,7 +31,9 @@ public enum ApprovalDecision: Equatable, Sendable {
 }
 
 /// Per-app approval rules: which apps need a prompt, which are never controllable, and which URL hosts are blocked.
-/// Patterns are fnmatch-style globs (`*` and `?`) matched case-insensitively against the bundle id and the app name.
+/// Patterns are fnmatch-style globs matched case-insensitively against the bundle id and the app name. This glob
+/// dialect supports `*` (any run of characters) and `?` (exactly one character); `Policy.matches`, which the older
+/// `deny`/`allow`/`background` lists use, only supports `*` and treats `?` literally.
 public struct ApprovalRules: Equatable, Sendable {
     public enum Mode: String, Codable, Equatable, Sendable {
         /// Never prompt (forbidden and deny lists still apply).
@@ -138,33 +140,102 @@ public struct ApprovalRules: Equatable, Sendable {
     /// True when the URL's host matches one of `hosts`. A pattern matches the host itself or any parent domain, so
     /// `example.com` also blocks `mail.example.com`; globs (`*.example.com`, `*bank*`) are applied to the full host.
     /// A bare host or host/path without a scheme is accepted. Ports and a trailing dot are ignored.
+    ///
+    /// Hosts and patterns are compared in one form: lower-case ASCII with internationalized labels in punycode
+    /// (`xn--bcher-kva.example`), the form `host(of:)` returns. Write patterns in punycode; a Unicode pattern is
+    /// converted the same way, but a glob inside a non-ASCII label is matched against that label's punycode text.
     public static func isBlocked(url: String, hosts: [String]) -> Bool {
         guard !hosts.isEmpty, let host = host(of: url) else { return false }
         let labels = host.split(separator: ".").map(String.init)
         var suffixes: [String] = []
         for i in 0..<labels.count { suffixes.append(labels[i...].joined(separator: ".")) }
         for pattern in hosts {
-            let p = pattern.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let p = pattern.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !p.isEmpty else { continue }
-            let bare = p.hasSuffix(".") ? String(p.dropLast()) : p
+            let bare = asciiHost(p.hasSuffix(".") ? String(p.dropLast()) : p)
             if suffixes.contains(where: { globMatches(bare, $0) }) { return true }
         }
         return false
     }
 
-    /// Extracts the lower-cased host of a URL string; tolerates a missing scheme.
+    /// Extracts the host of a URL string in lower-case ASCII (punycode) form; tolerates a missing scheme.
+    ///
+    /// Special (WHATWG) schemes treat a backslash like a slash, so for scheme-less, `http` and `https` URLs every
+    /// `\` is replaced with `/` before parsing: `https://example.com\@evil.com/` is `example.com`, not `evil.com`
+    /// (which is what an RFC 3986 parser makes of it).
     public static func host(of url: String) -> String? {
-        let s = url.trimmingCharacters(in: .whitespacesAndNewlines)
+        var s = url.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !s.isEmpty else { return nil }
+        let scheme = s.range(of: "://").map { String(s[..<$0.lowerBound]).lowercased() }
+        if scheme == nil || scheme == "http" || scheme == "https" { s = s.replacingOccurrences(of: "\\", with: "/") }
         var candidate = s
-        if !s.contains("://") {
+        if scheme == nil {
             // "example.com/x", "//example.com", "user@example.com:8080"
             candidate = "https://" + (s.hasPrefix("//") ? String(s.dropFirst(2)) : s)
         }
-        guard let c = URLComponents(string: candidate), var h = c.host?.lowercased(), !h.isEmpty else { return nil }
+        guard let c = URLComponents(string: candidate), let raw = c.host, !raw.isEmpty else { return nil }
+        var h = asciiHost(raw)
         if h.hasSuffix(".") { h.removeLast() }
+        guard !h.isEmpty else { return nil }
         if h.hasPrefix("[") { return nil } // IPv6 literals are never matched by host patterns
         return h
+    }
+
+    // MARK: IDNA
+
+    /// Lower-cases a host and converts every label with non-ASCII characters to its `xn--` punycode form (RFC 3492)
+    /// after NFC normalization. Foundation decodes punycode on input and percent-encodes non-ASCII hosts on output,
+    /// so this is the one canonical form hosts and patterns are compared in. ASCII input is returned lower-cased.
+    public static func asciiHost(_ host: String) -> String {
+        let lowered = host.lowercased().precomposedStringWithCanonicalMapping
+        return lowered.split(separator: ".", omittingEmptySubsequences: false).map { label -> String in
+            let scalars = Array(label.unicodeScalars.map { $0.value })
+            if scalars.allSatisfy({ $0 < 0x80 }) { return String(label) }
+            return "xn--" + punycode(scalars)
+        }.joined(separator: ".")
+    }
+
+    /// RFC 3492 punycode encoding of one label (without the `xn--` prefix).
+    static func punycode(_ input: [UInt32]) -> String {
+        let base = 36, tmin = 1, tmax = 26, skew = 38, damp = 700
+        var n: UInt32 = 128, delta = 0, bias = 72
+        var out: [UInt8] = input.filter { $0 < 0x80 }.map { UInt8($0) }
+        let basic = out.count
+        var handled = basic
+        if basic > 0 { out.append(UInt8(ascii: "-")) }
+        func adapt(_ d: Int, _ numPoints: Int, _ first: Bool) -> Int {
+            var d = first ? d / damp : d / 2
+            d += d / numPoints
+            var k = 0
+            while d > ((base - tmin) * tmax) / 2 { d /= base - tmin; k += base }
+            return k + (base - tmin + 1) * d / (d + skew)
+        }
+        func digit(_ d: Int) -> UInt8 { d < 26 ? UInt8(ascii: "a") + UInt8(d) : UInt8(ascii: "0") + UInt8(d - 26) }
+        while handled < input.count {
+            let m = input.filter { $0 >= n }.min()!
+            delta += Int(m - n) * (handled + 1)
+            n = m
+            for c in input {
+                if c < n { delta += 1 }
+                guard c == n else { continue }
+                var q = delta
+                var k = base
+                while true {
+                    let t = k <= bias ? tmin : (k >= bias + tmax ? tmax : k - bias)
+                    if q < t { break }
+                    out.append(digit(t + (q - t) % (base - t)))
+                    q = (q - t) / (base - t)
+                    k += base
+                }
+                out.append(digit(q))
+                bias = adapt(delta, handled + 1, handled == basic)
+                delta = 0
+                handled += 1
+            }
+            delta += 1
+            n += 1
+        }
+        return String(decoding: out, as: UTF8.self)
     }
 }
 
@@ -172,6 +243,8 @@ public struct ApprovalRules: Equatable, Sendable {
 /// Session grants only count while the daemon that recorded them is the one asking (pid match). Thread-safe.
 public final class ApprovalStore: @unchecked Sendable {
     public let url: URL
+    /// Called (outside the lock) with a description of every failed write, so the daemon can log it.
+    public var onError: ((String) -> Void)?
     private let lock = NSLock()
     private var always: [String: String] = [:]
     private var session: [String: Int32] = [:]
@@ -188,8 +261,10 @@ public final class ApprovalStore: @unchecked Sendable {
 
     // MARK: Mutation
 
-    /// Records a grant. A session grant is tagged with the daemon pid; an `always` grant records the time.
-    public func grant(_ grant: ApprovalGrant, for bundleId: String, daemonPid: Int32) {
+    /// Records a grant. A session grant is tagged with the daemon pid; an `always` grant records the time. Returns
+    /// false when the file could not be written (the grant still applies in memory).
+    @discardableResult
+    public func grant(_ grant: ApprovalGrant, for bundleId: String, daemonPid: Int32) -> Bool {
         lock.lock(); defer { lock.unlock() }
         switch grant {
         case .always:
@@ -198,23 +273,25 @@ public final class ApprovalStore: @unchecked Sendable {
         case .session:
             session[bundleId] = daemonPid
         }
-        save()
+        return save()
     }
 
-    /// Removes every grant for the app.
-    public func revoke(_ bundleId: String) {
+    /// Removes every grant for the app. Returns false when the file could not be written.
+    @discardableResult
+    public func revoke(_ bundleId: String) -> Bool {
         lock.lock(); defer { lock.unlock() }
         always.removeValue(forKey: bundleId)
         session.removeValue(forKey: bundleId)
-        save()
+        return save()
     }
 
-    /// Removes all grants.
-    public func clear() {
+    /// Removes all grants. Returns false when the file could not be written.
+    @discardableResult
+    public func clear() -> Bool {
         lock.lock(); defer { lock.unlock() }
         always = [:]
         session = [:]
-        save()
+        return save()
     }
 
     // MARK: Queries
@@ -264,13 +341,32 @@ public final class ApprovalStore: @unchecked Sendable {
         session = f.session ?? [:]
     }
 
-    private func save() {
+    /// Writes the file: the data goes to a sibling temp file created with mode 0600, which is then renamed over
+    /// the destination, so the grants are never readable by other users and never half-written. Failures are
+    /// reported through `onError` and as a false return.
+    private func save() -> Bool {
         let f = File(always: always, session: session)
         let enc = JSONEncoder()
         enc.outputFormatting = [.prettyPrinted, .sortedKeys]
-        guard let data = try? enc.encode(f) else { return }
-        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try? data.write(to: url, options: .atomic)
-        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        let failure: String
+        do {
+            let data = try enc.encode(f)
+            let dir = url.deletingLastPathComponent()
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            let tmp = dir.appendingPathComponent(".\(url.lastPathComponent).\(getpid()).\(UInt32.random(in: 0...UInt32.max)).tmp")
+            guard FileManager.default.createFile(atPath: tmp.path, contents: data, attributes: [.posixPermissions: 0o600]) else {
+                throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: tmp.path])
+            }
+            if rename(tmp.path, url.path) != 0 {
+                let err = errno
+                try? FileManager.default.removeItem(at: tmp)
+                throw POSIXError(POSIXErrorCode(rawValue: err) ?? .EIO)
+            }
+            return true
+        } catch {
+            failure = "could not save approvals to \(url.path): \(error)"
+        }
+        if let cb = onError { DispatchQueue.global().async { cb(failure) } }
+        return false
     }
 }

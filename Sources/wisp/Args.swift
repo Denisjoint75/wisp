@@ -11,7 +11,7 @@ struct Args {
         "app", "a", "tab", "t", "window", "w", "el", "e", "at", "from", "to", "button", "count", "pages", "query", "q",
         "max-lines", "format", "prefix", "suffix", "cursor", "space", "socket", "lines", "port", "profile", "url", "o", "out",
         "display", "file", "seconds", "expression", "key", "value", "text", "action", "deny", "allow", "background",
-        "instructions-mode", "banner-text", "banner-hint", "lens",
+        "instructions-mode", "banner-text", "banner-hint", "lens", "approval", "high-risk", "forbid", "block-url",
     ]
 
     init(_ argv: [String]) {
