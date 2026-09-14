@@ -40,13 +40,29 @@ final class CursorOverlay {
     private let glowLayer = CAShapeLayer()
     private let arrowLayer = CAShapeLayer()
     private let ringLayer = CAShapeLayer()
-    private let loadingLayer = CAShapeLayer()
     private let glyphContainer = CALayer()
     private let panelSize: CGFloat = 96
     private let hotspot = CGPoint(x: 24, y: 24)
     private var config = CursorMotionConfig()
+    private static let defaultAccent = NSColor(red: 0.31, green: 0.55, blue: 1.0, alpha: 1)
     var enabled = true
-    var accent = NSColor(red: 0.31, green: 0.55, blue: 1.0, alpha: 1)
+    var accent = CursorOverlay.defaultAccent
+
+    // lens (activity indicator) state
+    private let lens: LensOverlay
+    /// Offset of the lens centre from the arrow tip while it follows the cursor (CG axes, y down).
+    private let lensCursorOffset = CGPoint(x: 28, y: 10)
+    /// Inset of the lens from the anchor window's top-right corner when the cursor is hidden.
+    private let lensAnchorInset: CGFloat = 14
+    /// Current activity as last set through `setActivity(_:anchor:)` or `setLoading(_:)`.
+    private(set) var activity: WispActivity = .idle
+    /// Master switch for the lens; `false` hides it and keeps it hidden regardless of activity.
+    var lensEnabled = true {
+        didSet { if lensEnabled != oldValue { applyActivity(animated: false) } }
+    }
+    private var lensAnchor: CGRect?
+    private var lensFollowsCursor = false
+    private var pauseHideTask: Task<Void, Never>?
 
     // motion state
     private var timer: Timer?
@@ -79,6 +95,7 @@ final class CursorOverlay {
         view = FlippedView(frame: NSRect(x: 0, y: 0, width: panelSize, height: panelSize))
         view.wantsLayer = true
         panel.contentView = view
+        lens = LensOverlay(accent: CursorOverlay.defaultAccent)
         buildLayers()
         panel.alphaValue = 0
     }
@@ -131,17 +148,6 @@ final class CursorOverlay {
         ringLayer.opacity = 0
         ringLayer.position = hotspot
         root.addSublayer(ringLayer)
-
-        loadingLayer.path = CGPath(ellipseIn: CGRect(x: -7, y: -7, width: 14, height: 14), transform: nil)
-        loadingLayer.fillColor = nil
-        loadingLayer.strokeColor = accent.cgColor
-        loadingLayer.lineWidth = 2.2
-        loadingLayer.lineCap = .round
-        loadingLayer.strokeStart = 0
-        loadingLayer.strokeEnd = 0.65
-        loadingLayer.opacity = 0
-        loadingLayer.position = CGPoint(x: hotspot.x + 26, y: hotspot.y + 26)
-        root.addSublayer(loadingLayer)
     }
 
     func setAccent(hex: String) {
@@ -153,20 +159,30 @@ final class CursorOverlay {
         glowLayer.shadowColor = accent.cgColor
         arrowLayer.fillColor = accent.cgColor
         ringLayer.strokeColor = accent.cgColor
-        loadingLayer.strokeColor = accent.cgColor
+        lens.setAccent(accent)
     }
 
     // MARK: Coordinate helpers (CG top-left origin <-> AppKit bottom-left origin)
 
-    private var primaryHeight: CGFloat { NSScreen.screens.first?.frame.height ?? 0 }
+    private static var primaryHeight: CGFloat { NSScreen.screens.first?.frame.height ?? 0 }
+
+    /// Converts a CG point (top-left origin, y down) to an AppKit point (bottom-left origin, y up) on the primary
+    /// screen. Shared by the cursor and lens panels.
+    static func appKitPoint(fromCG p: CGPoint) -> NSPoint {
+        NSPoint(x: p.x, y: primaryHeight - p.y)
+    }
 
     private func panelOrigin(for cgPoint: CGPoint) -> NSPoint {
-        NSPoint(x: cgPoint.x - hotspot.x, y: primaryHeight - cgPoint.y - (panelSize - hotspot.y))
+        let tip = CursorOverlay.appKitPoint(fromCG: cgPoint)
+        return NSPoint(x: tip.x - hotspot.x, y: tip.y - (panelSize - hotspot.y))
     }
 
     private func place(_ p: CGPoint) {
         current = p
         panel.setFrameOrigin(panelOrigin(for: p))
+        if lensFollowsCursor, lens.isVisible {
+            lens.place(centerCG: CGPoint(x: p.x + lensCursorOffset.x, y: p.y + lensCursorOffset.y))
+        }
     }
 
     // MARK: Public API
@@ -180,7 +196,9 @@ final class CursorOverlay {
             ctx.duration = 0.18
             panel.animator().alphaValue = 1
         }
+        let wasVisible = visible
         visible = true
+        if !wasVisible { updateLensPlacement(animated: true) }
     }
 
     func hide(after delay: Double = 1.2) {
@@ -198,15 +216,17 @@ final class CursorOverlay {
             self.panel.animator().alphaValue = 0
         }
         visible = false
-        setLoading(false)
+        // The lens is independent of the cursor: fall back to the anchor placement (or hide) rather than dropping it.
+        updateLensPlacement(animated: true)
     }
 
+    /// Hides the cursor immediately and returns the activity to idle (used on intervention and shutdown).
     func hideNow() {
         hideTask?.cancel()
         panel.alphaValue = 0
         panel.orderOut(nil)
         visible = false
-        setLoading(false)
+        setActivity(.idle, anchor: nil)
     }
 
     /// Animates to `target` (CG coords). Returns once the spring is 99.5% done or within ~3pt (Sky's "closeEnough").
@@ -390,21 +410,92 @@ final class CursorOverlay {
         ringLayer.add(group, forKey: "pulse")
     }
 
+    // MARK: Activity (lens)
+
+    /// Sets the activity state and the window the lens should attach to when the cursor is hidden.
+    ///
+    /// - `anchor`: the target window frame in CG (top-left origin) screen coordinates, or nil. While the cursor
+    ///   panel is visible the lens sits 28 pt to the right of the arrow tip and follows it; otherwise it sits inside
+    ///   the anchor's top-right corner with a 14 pt inset; with no anchor and no cursor it stays hidden.
+    /// - `.observing` and `.acting` show the lens (120 ms fade-in); `.idle` hides it (200 ms fade-out); `.paused`
+    ///   turns the arc neutral gray, freezes the sweep and hides the lens after 1 s.
+    func setActivity(_ a: WispActivity, anchor: CGRect?) {
+        activity = a
+        lensAnchor = anchor
+        applyActivity(animated: true)
+    }
+
+    /// Legacy loading toggle kept for existing call sites: `true` maps to `.observing` when idle and `false`
+    /// returns `.observing` to `.idle`. An explicit `.acting` or `.paused` state set through `setActivity` is left
+    /// untouched so a settle inside an action does not flip the indicator.
     func setLoading(_ on: Bool) {
-        if on {
-            guard visible else { return }
-            if loadingLayer.animation(forKey: "spin") == nil {
-                let spin = CABasicAnimation(keyPath: "transform.rotation.z")
-                spin.fromValue = 0
-                spin.toValue = 2 * Double.pi
-                spin.duration = 0.9
-                spin.repeatCount = .infinity
-                loadingLayer.add(spin, forKey: "spin")
+        switch (on, activity) {
+        case (true, .idle): setActivity(.observing, anchor: lensAnchor)
+        case (false, .observing): setActivity(.idle, anchor: lensAnchor)
+        default: break
+        }
+    }
+
+    /// Where the lens centre should be right now (CG coords), or nil when it has nowhere to go.
+    private func lensCenter() -> (CGPoint, followsCursor: Bool)? {
+        if visible {
+            return (CGPoint(x: current.x + lensCursorOffset.x, y: current.y + lensCursorOffset.y), true)
+        }
+        if let a = lensAnchor {
+            let half = LensOverlay.size / 2
+            let inset = lensAnchorInset
+            let c = CGPoint(x: a.maxX - inset - half, y: a.minY + inset + half)
+            return (c, false)
+        }
+        return nil
+    }
+
+    /// Re-places (or hides) the lens after the cursor or anchor changed, without touching the activity state.
+    private func updateLensPlacement(animated: Bool) {
+        guard lensEnabled, activity != .idle else { return }
+        guard let (c, follows) = lensCenter() else {
+            lensFollowsCursor = false
+            lens.hide()
+            return
+        }
+        lensFollowsCursor = follows
+        lens.place(centerCG: c, animated: animated && lens.isVisible)
+        if !lens.isVisible, activity != .paused { lens.show() }
+    }
+
+    private func applyActivity(animated: Bool) {
+        pauseHideTask?.cancel()
+        pauseHideTask = nil
+        guard lensEnabled else {
+            lensFollowsCursor = false
+            lens.hide(immediately: true)
+            return
+        }
+        switch activity {
+        case .idle:
+            lensFollowsCursor = false
+            lens.setPaused(false)
+            lens.hide()
+        case .observing, .acting:
+            lens.setPaused(false)
+            guard let (c, follows) = lensCenter() else {
+                lensFollowsCursor = false
+                lens.hide()
+                return
             }
-            loadingLayer.opacity = 1
-        } else {
-            loadingLayer.opacity = 0
-            loadingLayer.removeAnimation(forKey: "spin")
+            lensFollowsCursor = follows
+            lens.place(centerCG: c, animated: animated && lens.isVisible)
+            if !lens.isVisible { lens.show() }
+        case .paused:
+            // Only a visible lens is "kept" for a second; a hidden one stays hidden.
+            guard lens.isVisible else { return }
+            lens.setPaused(true)
+            pauseHideTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                guard let self = self, !Task.isCancelled, self.activity == .paused else { return }
+                self.lensFollowsCursor = false
+                self.lens.hide()
+            }
         }
     }
 
