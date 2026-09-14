@@ -2,7 +2,7 @@
 # Builds release binaries and assembles dist/Wisp.app (daemon + Sparkle.framework + icon) and dist/wisp (CLI),
 # signing everything with the given identity ("-" = ad-hoc).
 #
-#   scripts/package.sh [--identity "Developer ID Application: ..."] [--output dist] [--feed-url URL]
+#   scripts/package.sh [--identity "Developer ID Application: ..."] [--output dist] [--feed-url URL] [--universal]
 # Env: WISP_SIGN_IDENTITY (default "-"), SPARKLE_PUBLIC_KEY (default: assets/sparkle-public-key.txt),
 #      WISP_FEED_URL (default: GitHub releases appcast).
 set -euo pipefail
@@ -11,11 +11,13 @@ cd "$(dirname "$0")/.."
 IDENTITY="${WISP_SIGN_IDENTITY:--}"
 OUT="dist"
 FEED_URL="${WISP_FEED_URL:-https://github.com/missuo/wisp/releases/latest/download/appcast.xml}"
+UNIVERSAL=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --identity) IDENTITY="$2"; shift 2 ;;
     --output) OUT="$2"; shift 2 ;;
     --feed-url) FEED_URL="$2"; shift 2 ;;
+    --universal) UNIVERSAL=1; shift ;;
     *) echo "unknown option $1" >&2; exit 2 ;;
   esac
 done
@@ -24,13 +26,20 @@ VERSION=$(sed -n 's/.*static let string = "\(.*\)".*/\1/p' Sources/WispCore/Vers
 BUILD=$(sed -n 's/.*static let build = "\(.*\)".*/\1/p' Sources/WispCore/Version.swift)
 
 echo "building release ($VERSION build $BUILD)…"
-swift build -c release 2>&1 | tail -1
+if [ "$UNIVERSAL" = 1 ]; then
+  swift build -c release --arch arm64 --arch x86_64 2>&1 | tail -1
+  PRODUCTS=".build/apple/Products/Release"
+else
+  swift build -c release 2>&1 | tail -1
+  PRODUCTS=".build/release"
+fi
 
 APP="$OUT/Wisp.app"
 rm -rf "$OUT"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks"
-cp .build/release/wispd "$APP/Contents/MacOS/wispd"
-cp .build/release/wisp "$OUT/wisp"
+cp "$PRODUCTS/wispd" "$APP/Contents/MacOS/wispd"
+cp "$PRODUCTS/wisp" "$OUT/wisp"
+echo "architectures: $(lipo -archs "$APP/Contents/MacOS/wispd")"
 
 # Sparkle.framework from the SwiftPM binary artifact
 SPARKLE_FW=$(find .build/artifacts -type d -name "Sparkle.framework" -path "*macos*" | head -1)

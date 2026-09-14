@@ -23,7 +23,7 @@ jobs:
     env:
       REPO: ${{ github.repository }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Resolve version
         run: |
@@ -57,7 +57,7 @@ jobs:
         run: scripts/set-version.sh "$VERSION" "$BUILD"
 
       - name: Build, package and sign
-        run: scripts/package.sh --identity "$SIGN_IDENTITY" --output dist
+        run: scripts/package.sh --identity "$SIGN_IDENTITY" --output dist --universal
 
       - name: Notarize and staple
         env:
@@ -111,6 +111,7 @@ jobs:
           rm "dist/appcast/Wisp-$VERSION.md"
           "$RUNNER_TEMP/sparkle/bin/generate_appcast" --ed-key-file "$RUNNER_TEMP/sparkle.key" \
             --download-url-prefix "https://github.com/$REPO/releases/download/v$VERSION/" \
+            --release-notes-url-prefix "https://github.com/$REPO/releases/download/v$VERSION/" \
             --link "https://github.com/$REPO/releases" \
             -o dist/appcast.xml dist/appcast
           rm -f "$RUNNER_TEMP/sparkle.key"
@@ -125,11 +126,11 @@ jobs:
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             git tag -f "$TAG" && git push origin "$TAG" --force
           fi
+          ASSETS=("dist/appcast/Wisp-$VERSION.zip" "dist/Wisp-$VERSION.dmg" "dist/wisp-cli-$VERSION.zip" dist/appcast.xml dist/SHA256SUMS.txt "dist/appcast/Wisp-$VERSION.html")
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" --clobber "dist/appcast/Wisp-$VERSION.zip" "dist/Wisp-$VERSION.dmg" "dist/wisp-cli-$VERSION.zip" dist/appcast.xml dist/SHA256SUMS.txt
+            gh release upload "$TAG" --clobber "${ASSETS[@]}"
           else
-            gh release create "$TAG" --title "Wisp $VERSION" --generate-notes \
-              "dist/appcast/Wisp-$VERSION.zip" "dist/Wisp-$VERSION.dmg" "dist/wisp-cli-$VERSION.zip" dist/appcast.xml dist/SHA256SUMS.txt
+            gh release create "$TAG" --title "Wisp $VERSION" --generate-notes "${ASSETS[@]}"
           fi
 
       - name: Remove signing keychain

@@ -88,8 +88,9 @@ Your existing Chrome windows can be controlled through accessibility instead: `w
 
 ## Releases and updates
 
-- Pushing a tag `vX.Y.Z` (or running the *Release* workflow manually) builds `Wisp.app` and the `wisp` CLI on GitHub
-  Actions, signs them with the Developer ID certificate, notarizes and staples them, produces
+- Pushing a tag `vX.Y.Z` (or running the *Release* workflow manually) builds universal (Apple silicon + Intel)
+  `Wisp.app` and `wisp` CLI binaries on GitHub Actions, signs them with the Developer ID certificate, notarizes and
+  staples them, produces
   `Wisp-X.Y.Z.zip`, `Wisp-X.Y.Z.dmg`, `wisp-cli-X.Y.Z.zip`, `SHA256SUMS.txt` and a Sparkle `appcast.xml`, and
   publishes everything as a GitHub release.
 - The app updates itself with Sparkle (`Check for Updates…` in the menu bar; automatic daily checks). The feed is
