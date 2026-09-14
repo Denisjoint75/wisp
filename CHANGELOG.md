@@ -3,6 +3,18 @@
 All notable changes to Wisp are documented here. The section for each released version is shown in the Sparkle
 update dialog and in the GitHub release. This project follows [Semantic Versioning](https://semver.org).
 
+## [0.0.4] - 2026-09-14
+
+### Changed
+- Wisp now operates apps in place. It no longer raises the target window or steals focus; a synthetic app-activation
+  event makes the app accept input while staying in the background, so you can keep working. Pass `--activate` to
+  bring an app forward for the rare one that ignores background input.
+
+### Added
+- Vision fallback: when a window exposes no actionable accessibility elements (custom-drawn apps, canvases, games),
+  the state includes a window screenshot so an agent can look and click by pixel coordinates. Request one any time
+  with `--screenshot`.
+
 ## [0.0.3] - 2026-09-14
 
 ### Added

@@ -380,6 +380,20 @@ enum EventSynth {
     // MARK: Activation
 
     @MainActor
+    /// Makes the target app believe it is active without raising its windows or stealing the user's focus, by
+    /// posting an AppKit-defined application-activated event to its process. Apps that gate input on `NSApp.isActive`
+    /// then accept our synthesized events while staying in the background. No effect on the real front app or cursor.
+    static func syntheticActivate(pid: pid_t, windowID: CGWindowID?) {
+        let windowNumber = windowID.map { Int($0) } ?? 0
+        guard let ns = NSEvent.otherEvent(with: .appKitDefined, location: .zero, modifierFlags: [],
+                                          timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: windowNumber,
+                                          context: nil, subtype: Int16(NSEvent.EventSubtype.applicationActivated.rawValue),
+                                          data1: 0, data2: 0),
+              let e = ns.cgEvent else { return }
+        e.setIntegerValueField(.eventSourceUserData, value: WispEventTag.magic)
+        e.postToPid(pid)
+    }
+
     static func bringToFront(_ app: NSRunningApplication, window: AXEl?) async {
         if NSWorkspace.shared.frontmostApplication?.processIdentifier != app.processIdentifier {
             if #available(macOS 14.0, *) { app.activate() } else { app.activate(options: [.activateIgnoringOtherApps]) }

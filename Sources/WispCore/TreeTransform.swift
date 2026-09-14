@@ -50,7 +50,7 @@ public enum TreeTransform {
         }
     }
 
-    static let interactiveRoles: Set<String> = ["field", "textarea", "secure-field", "search", "checkbox", "radio",
+    public static let interactiveRoles: Set<String> = ["field", "textarea", "secure-field", "search", "checkbox", "radio",
         "combo", "popup", "slider", "stepper", "switch", "toggle", "colorwell", "datefield", "timefield", "btn",
         "link", "tab", "menuitem", "menubaritem", "option", "disclosure", "stepper"]
 

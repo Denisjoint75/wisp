@@ -496,8 +496,24 @@ actor Daemon {
             "settled": .bool(settled), "elements": .int(rendered.nodesByIndex.count), "lines": .int(rendered.lines.count),
         ]
         if let i = instructions { out["instructions"] = .string(i); out["text"] = .string("<app_specific_instructions>\n\(i)\n</app_specific_instructions>\n" + text) }
-        if options.screenshot {
-            do { out["screenshot"] = try await screenshot().json } catch let e as WispError { out["screenshotError"] = e.json }
+        // Screenshot fallback: when the accessibility tree exposes nothing actionable (custom-drawn apps, canvases,
+        // games, an app that has not populated its tree), attach a window screenshot so the caller can look and click
+        // by pixel coordinates. Only on a full read (not diffs), and only the first time for a given sparse tree.
+        var actionable = 0
+        root.walk { n, _ in if TreeTransform.interactiveRoles.contains(n.role) { actionable += 1 } }
+        let sparse = actionable == 0 && rendered.nodesByIndex.count < 4
+        let autoShot = sparse && mode == "full" && !options.screenshot
+        if options.screenshot || (autoShot && ScreenshotService.hasPermission) {
+            do {
+                out["screenshot"] = try await screenshot().json
+                if autoShot {
+                    let note = "\n# The accessibility tree is empty or has no actionable elements, so a screenshot of the window is attached. Read it, then click by pixel coordinates: `--at x,y --space screenshot` (coordinates are pixels of this screenshot)."
+                    out["text"] = .string((out["text"]?.string ?? text) + note)
+                }
+            } catch let e as WispError { out["screenshotError"] = e.json }
+        } else if autoShot, !ScreenshotService.hasPermission {
+            let note = "\n# The accessibility tree is empty or has no actionable elements. Grant Screen Recording and pass `--screenshot` to see the window and click by pixel coordinates (`--at x,y --space screenshot`)."
+            out["text"] = .string((out["text"]?.string ?? text) + note)
         }
         return .object(out)
     }
@@ -641,9 +657,12 @@ actor Daemon {
     private func performApp(_ s: AppSession, window w: WindowInfo, action: UIAction, params: JSON) async throws {
         setActive(s.displayName)
         let delivery: Delivery = params["delivery"].string == "hid" ? .hid : .pid(s.pid)
-        let activate = params["activate"].bool ?? !s.background
         let space = params["space"].string
-        if activate { await EventSynth.bringToFront(s.app, window: w.element) }
+        // Operate in place by default: never raise the window or steal the user's focus. A synthetic app-activation
+        // event makes the target believe it is active so it accepts our events while staying in the background.
+        // `--activate` (activate=true) opts into actually bringing the app forward for the rare app that needs it.
+        if params["activate"].bool == true { await EventSynth.bringToFront(s.app, window: w.element) }
+        else { await MainActor.run { EventSynth.syntheticActivate(pid: s.pid, windowID: w.id) } }
         let cursor = await MainActor.run { CursorOverlay.shared }
         let useCursor = policy.cursorEnabled && (params["cursor"].bool ?? true)
 

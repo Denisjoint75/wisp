@@ -63,6 +63,8 @@ wisp screenshot --app Preview          # then: wisp click --app Preview --at 640
 
 ## Rules
 
+- Wisp operates in place: it does not move the real mouse or bring the app to the front, so the user can keep working. Add `--activate` only if an app ignores input while in the background.
+- Prefer the accessibility tree. When it looks empty or incomplete, or an action does not take effect, add `--screenshot` to get a picture of the window (needs Screen Recording), then click by pixel coordinates with `--at x,y --space screenshot`. Wisp also attaches a screenshot automatically when a window exposes no actionable elements.
 - Prefer `--el` over coordinates. Use `--at x,y` only from a screenshot taken in the same state (pixels of that image).
 - Prefer `wisp set` for fields, `wisp paste` for multi-line or formatted text, `wisp type` for short text at the focus.
 - `wisp key` uses xdotool syntax: `Return`, `cmd+l`, `ctrl+shift+t`, `cmd+a,BackSpace` (comma = sequence).

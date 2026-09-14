@@ -82,6 +82,9 @@ enum Commands {
         var p = merge(try target(a), stateOptions(a))
         p["action"] = action
         if a.flag("no-observe") { p["observe"] = false }
+        // Wisp operates in place by default (no window raise). --activate forces the app to the front for the rare
+        // app that ignores background input; --no-activate is the explicit default and kept for clarity.
+        if a.flag("activate") { p["activate"] = true }
         if a.flag("no-activate") { p["activate"] = false }
         if a.flag("hid") { p["delivery"] = "hid" }
         if a.flag("no-cursor") { p["cursor"] = false }

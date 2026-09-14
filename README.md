@@ -116,7 +116,12 @@ Your existing Chrome windows can be controlled through accessibility instead: `w
   (sheets, menus and out-of-process Open/Save panels are separate windows and processes), tagged with a magic
   user-data value, carrying the target window in `kCGMouseEventWindowUnderMousePointer`; keys mapped through the
   active keyboard layout (`UCKeyTranslate`) and delivered to the process that owns keyboard focus; text typed as
-  unicode key events or pasted through a restored clipboard.
+  unicode key events or pasted through a restored clipboard. The real pointer never moves and the window is never
+  raised: a synthetic app-activation event makes the target accept input while it stays in the background, so you
+  can keep working. `--activate` opts into bringing an app forward for the rare one that ignores background input.
+- **Vision fallback:** the accessibility tree is preferred, but when a window exposes no actionable elements
+  (custom-drawn apps, canvases, games) Wisp attaches a window screenshot so the caller can look and click by pixel
+  coordinates (`--at x,y --space screenshot`); `--screenshot` requests one on demand.
 - **Cursor:** an overlay `NSPanel` at window level 102 with a glowing arrow; motion uses the spring/path constants
   recovered from Sky (`clickAngle -44°`, scoot under 196 pt, `closeEnough` at 99.5 % / 3.2 pt); the mouse-down is
   posted only when the cursor has visually arrived.
