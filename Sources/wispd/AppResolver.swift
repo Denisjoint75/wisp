@@ -165,23 +165,43 @@ enum AppResolver {
 
     struct WindowHit { var id: CGWindowID; var pid: pid_t; var owner: String }
 
-    /// Frontmost on-screen window containing the point, ignoring our own overlay windows. Sheets, popovers, menus and
-    /// out-of-process panels (Open/Save panels live in `com.apple.appkit.xpc.openAndSavePanelService`) are separate windows.
-    static func window(under p: CGPoint, preferring pid: pid_t?) -> WindowHit? {
+    /// Resolves which window a synthesized pointer event at `p` should target for a session on `pid`.
+    /// Walks the on-screen window list front to back and returns the first window that is either owned by the target
+    /// app (its main window, popups, menus, sheets) or an out-of-process panel drawn on its behalf (Open/Save panels
+    /// live in `com.apple.appkit.xpc.openAndSavePanelService`, other remote views in ViewBridge services).
+    /// Unrelated windows stacked above the target (an app the user is working in, the Dock's full-screen backstop,
+    /// the menu bar, overlays) are skipped: events are addressed to the target window itself, so they keep landing
+    /// there without hijacking the user's pointer or requiring the window to be frontmost.
+    static func pointerTarget(at p: CGPoint, pid: pid_t) -> WindowHit? {
         let list = (CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]) ?? []
         let me = getpid()
         for c in list {
             guard let owner = c[kCGWindowOwnerPID as String] as? Int32, owner != me, let b = c[kCGWindowBounds as String] as? [String: Double] else { continue }
-            let layer = (c[kCGWindowLayer as String] as? Int) ?? 0
-            if layer < 0 || layer > 1000 { continue }
             let alpha = (c[kCGWindowAlpha as String] as? Double) ?? 1
             if alpha < 0.05 { continue }
             let r = CGRect(x: b["X"] ?? 0, y: b["Y"] ?? 0, width: b["Width"] ?? 0, height: b["Height"] ?? 0)
-            if r.contains(p), let id = c[kCGWindowNumber as String] as? UInt32 {
-                return WindowHit(id: id, pid: owner, owner: (c[kCGWindowOwnerName as String] as? String) ?? "")
-            }
+            guard r.contains(p), let id = c[kCGWindowNumber as String] as? UInt32 else { continue }
+            let name = (c[kCGWindowOwnerName as String] as? String) ?? ""
+            if owner == pid { return WindowHit(id: id, pid: owner, owner: name) }
+            let layer = (c[kCGWindowLayer as String] as? Int) ?? 0
+            if (0...8).contains(layer), isPanelHelper(pid: owner) { return WindowHit(id: id, pid: owner, owner: name) }
         }
         return nil
+    }
+
+    private static let helperLock = NSLock()
+    private static var helperCache: [pid_t: Bool] = [:]
+
+    /// True for AppKit XPC services that draw panels on behalf of other apps (open/save panels, remote views).
+    static func isPanelHelper(pid: pid_t) -> Bool {
+        helperLock.lock(); defer { helperLock.unlock() }
+        if let cached = helperCache[pid] { return cached }
+        var buf = [CChar](repeating: 0, count: 4096)  // PROC_PIDPATHINFO_MAXSIZE
+        let n = proc_pidpath(pid, &buf, UInt32(buf.count))
+        let path = n > 0 ? String(cString: buf) : ""
+        let helper = path.contains(".xpc/Contents/MacOS/") && (path.contains("com.apple.appkit.xpc.") || path.contains("ViewBridge"))
+        helperCache[pid] = helper
+        return helper
     }
 
     /// Lists AX windows of an app with CGWindow ids resolved by frame/title matching.

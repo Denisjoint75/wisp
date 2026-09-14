@@ -157,6 +157,9 @@ enum EventSynth {
         if let w = windowID, w != 0 {
             e.setIntegerValueField(.mouseEventWindowUnderMousePointer, value: Int64(w))
             e.setIntegerValueField(.mouseEventWindowUnderMousePointerThatCanHandleThisEvent, value: Int64(w))
+            // Field 51 is the event record's window id; AppKit uses it for `NSEvent.windowNumber`, so the target
+            // window (not whatever is under the real pointer) receives the event.
+            e.setIntegerValueField(CGEventField(rawValue: 51)!, value: Int64(w))
         }
         return e
     }

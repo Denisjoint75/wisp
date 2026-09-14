@@ -124,17 +124,23 @@ final class RenderAndDiffTests: XCTestCase {
         let label = UINode(identity: "t", role: "txt", rawRole: "AXStaticText"); label.name = "Email"; label.frame = UIRect(x: 0, y: 0, w: 50, h: 10)
         let field = UINode(identity: "f", role: "field", rawRole: "AXTextField"); field.frame = UIRect(x: 60, y: 0, w: 100, h: 10)
         root.add(label); root.add(field)
-        let off = UINode(identity: "o", role: "btn", rawRole: "AXButton"); off.name = "Hidden"; off.frame = UIRect(x: 900, y: 900, w: 10, h: 10)
-        root.add(off)
+        // An offscreen interactive control is kept (marked offscreen) so it can still be targeted; the action scrolls it in.
+        let offBtn = UINode(identity: "o", role: "btn", rawRole: "AXButton"); offBtn.name = "Hidden"; offBtn.frame = UIRect(x: 900, y: 900, w: 10, h: 10)
+        root.add(offBtn)
+        // An offscreen non-interactive leaf is dropped.
+        let offText = UINode(identity: "ot", role: "txt", rawRole: "AXStaticText"); offText.name = "Faraway"; offText.frame = UIRect(x: 900, y: 950, w: 40, h: 10)
+        root.add(offText)
         var o = TreeTransform.Options()
         o.clip = UIRect(x: 0, y: 0, w: 500, h: 500)
         let out = TreeTransform.apply(root, options: o)
-        XCTAssertEqual(out.children.count, 1)
+        XCTAssertEqual(out.children.count, 2)
         XCTAssertEqual(out.children[0].role, "field")
         XCTAssertEqual(out.children[0].name, "Email")
         let text = TreeRenderer.render(out).text
         XCTAssertTrue(text.contains("field \"Email\""))
-        XCTAssertFalse(text.contains("Hidden"))
+        XCTAssertTrue(text.contains("Hidden"))
+        XCTAssertTrue(out.children.contains { $0.name == "Hidden" && $0.states.contains(.offscreen) })
+        XCTAssertFalse(text.contains("Faraway"))
     }
 
     func testQueryFilterKeepsAncestors() {

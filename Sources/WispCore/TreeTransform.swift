@@ -11,7 +11,10 @@ public enum TreeTransform {
     }
 
     public static func apply(_ root: UINode, options: Options = Options()) -> UINode {
-        if options.dropOffscreen, let clip = options.clip { dropOffscreen(root, clip: clip) }
+        if let clip = options.clip {
+            markOffscreen(root, clip: clip)
+            if options.dropOffscreen { dropOffscreen(root, clip: clip) }
+        }
         associateTitles(root)
         mergeRepetitiveText(root)
         unwrapTrivialGroups(root)
@@ -22,7 +25,16 @@ public enum TreeTransform {
         return root
     }
 
+    /// Marks nodes whose frame lies entirely outside the clip rect as offscreen (used to hint that a click will scroll).
+    static func markOffscreen(_ node: UINode, clip: UIRect) {
+        for child in node.children { markOffscreen(child, clip: clip) }
+        if let f = node.frame, !f.isEmpty, !f.intersects(clip), node.role != "window", node.role != "app" {
+            node.states.insert(.offscreen)
+        }
+    }
+
     /// Removes nodes that are completely outside the clip rect (or have zero size) unless they carry visible descendants.
+    /// Interactive controls are kept even when offscreen so they can still be targeted (the action scrolls them in).
     static func dropOffscreen(_ node: UINode, clip: UIRect) {
         node.children = node.children.filter { child in
             dropOffscreen(child, clip: clip)
@@ -31,14 +43,16 @@ public enum TreeTransform {
             if visible { return true }
             if !child.children.isEmpty { return true }
             if child.states.contains(.focused) { return true }
-            // Menu items and popups often report frames outside the window; keep interactive off-window items.
+            // Keep interactive controls and menu items even when off-window: the caller scrolls them into view on use.
+            if interactiveRoles.contains(child.role) { return true }
             if child.role == "menuitem" || child.role == "menu" { return true }
             return false
         }
-        if let f = node.frame, !f.isEmpty, !f.intersects(clip), node.role != "window", node.role != "app" {
-            node.states.insert(.offscreen)
-        }
     }
+
+    static let interactiveRoles: Set<String> = ["field", "textarea", "secure-field", "search", "checkbox", "radio",
+        "combo", "popup", "slider", "stepper", "switch", "toggle", "colorwell", "datefield", "timefield", "btn",
+        "link", "tab", "menuitem", "menubaritem", "option", "disclosure", "stepper"]
 
     /// Gives unnamed controls the text of a static-text sibling that precedes them.
     static func associateTitles(_ node: UINode) {

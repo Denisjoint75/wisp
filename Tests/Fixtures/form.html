@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Wisp form playground</title>
+<style>
+  :root { color-scheme: light; font-family: -apple-system, system-ui, sans-serif; }
+  body { margin: 0; background: #f4f5f9; color: #1a1d2e; }
+  main { max-width: 760px; margin: 32px auto; padding: 0 20px 48px; }
+  h1 { font-size: 24px; margin: 0 0 4px; }
+  p.lead { margin: 0 0 24px; color: #5b6078; }
+  fieldset { border: 1px solid #d8dbe6; border-radius: 10px; background: #fff; padding: 16px 20px; margin: 0 0 18px; }
+  legend { font-weight: 600; padding: 0 6px; }
+  .row { display: grid; grid-template-columns: 180px 1fr; gap: 10px 16px; align-items: center; margin: 10px 0; }
+  label { font-size: 14px; }
+  input[type=text], input[type=email], input[type=password], input[type=number], input[type=date], input[type=tel], select, textarea {
+    font: inherit; padding: 7px 9px; border: 1px solid #c9cddb; border-radius: 6px; width: 100%; box-sizing: border-box; background: #fff;
+  }
+  textarea { min-height: 70px; resize: vertical; }
+  .choices { display: flex; gap: 16px; flex-wrap: wrap; }
+  .choices label { display: inline-flex; align-items: center; gap: 6px; }
+  .switch { position: relative; display: inline-block; width: 44px; height: 24px; }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .switch span { position: absolute; inset: 0; background: #c9cddb; border-radius: 24px; transition: .2s; }
+  .switch span::before { content: ""; position: absolute; width: 18px; height: 18px; left: 3px; top: 3px; background: #fff; border-radius: 50%; transition: .2s; }
+  .switch input:checked + span { background: #4f5bd5; }
+  .switch input:checked + span::before { transform: translateX(20px); }
+  .dropdown { position: relative; }
+  .dropdown button { font: inherit; width: 100%; text-align: left; padding: 7px 9px; border: 1px solid #c9cddb; border-radius: 6px; background: #fff; cursor: pointer; }
+  .dropdown ul { position: absolute; z-index: 5; left: 0; right: 0; margin: 4px 0 0; padding: 4px; list-style: none; background: #fff; border: 1px solid #c9cddb; border-radius: 6px; box-shadow: 0 8px 24px rgba(0,0,0,.12); }
+  .dropdown ul[hidden] { display: none; }
+  .dropdown li { padding: 7px 9px; border-radius: 4px; cursor: pointer; }
+  .dropdown li:hover, .dropdown li[aria-selected=true] { background: #eef0ff; }
+  .chips { display: flex; gap: 8px; flex-wrap: wrap; }
+  .chip { padding: 6px 12px; border: 1px solid #c9cddb; border-radius: 999px; background: #fff; cursor: pointer; font: inherit; }
+  .chip[aria-pressed=true] { background: #4f5bd5; color: #fff; border-color: #4f5bd5; }
+  .actions { display: flex; gap: 12px; }
+  button.primary { font: inherit; padding: 9px 18px; border: 0; border-radius: 8px; background: #4f5bd5; color: #fff; cursor: pointer; }
+  button.secondary { font: inherit; padding: 9px 18px; border: 1px solid #c9cddb; border-radius: 8px; background: #fff; cursor: pointer; }
+  #result { white-space: pre-wrap; font-family: ui-monospace, Menlo, monospace; font-size: 13px; background: #1a1d2e; color: #e6e8f2; padding: 14px; border-radius: 10px; min-height: 40px; }
+  output { font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Wisp form playground</h1>
+  <p class="lead">A page with every common kind of form control, used to exercise computer-use agents.</p>
+
+  <form id="signup" autocomplete="off">
+    <fieldset>
+      <legend>Text inputs</legend>
+      <div class="row"><label for="fullName">Full name</label><input id="fullName" name="fullName" type="text" placeholder="Jane Doe"></div>
+      <div class="row"><label for="email">Email</label><input id="email" name="email" type="email" placeholder="jane@example.com"></div>
+      <div class="row"><label for="phone">Phone</label><input id="phone" name="phone" type="tel" placeholder="+81 90 1234 5678"></div>
+      <div class="row"><label for="password">Password</label><input id="password" name="password" type="password"></div>
+      <div class="row"><label for="age">Age</label><input id="age" name="age" type="number" min="0" max="120"></div>
+      <div class="row"><label for="birthday">Birthday</label><input id="birthday" name="birthday" type="date"></div>
+      <div class="row"><label for="city">City (datalist)</label><input id="city" name="city" list="cities" placeholder="Start typing"></div>
+      <datalist id="cities"><option value="Tokyo"><option value="Toronto"><option value="Turin"><option value="Osaka"></datalist>
+      <div class="row"><label for="bio">Bio</label><textarea id="bio" name="bio" placeholder="A few words about yourself"></textarea></div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Selects</legend>
+      <div class="row"><label for="country">Country (native select)</label>
+        <select id="country" name="country">
+          <option value="">Choose a country</option>
+          <option value="jp">Japan</option>
+          <option value="us">United States</option>
+          <option value="de">Germany</option>
+          <option value="br">Brazil</option>
+        </select></div>
+      <div class="row"><label for="languages">Languages (multi-select)</label>
+        <select id="languages" name="languages" multiple size="4">
+          <option value="en">English</option>
+          <option value="ja">Japanese</option>
+          <option value="zh">Chinese</option>
+          <option value="es">Spanish</option>
+        </select></div>
+      <div class="row"><label id="planLabel">Plan (custom dropdown)</label>
+        <div class="dropdown" id="planDropdown">
+          <button type="button" id="planButton" aria-haspopup="listbox" aria-expanded="false" aria-labelledby="planLabel planButton">Select a plan</button>
+          <ul id="planList" role="listbox" aria-labelledby="planLabel" hidden>
+            <li role="option" data-value="free" aria-selected="false">Free</li>
+            <li role="option" data-value="pro" aria-selected="false">Pro</li>
+            <li role="option" data-value="team" aria-selected="false">Team</li>
+            <li role="option" data-value="enterprise" aria-selected="false">Enterprise</li>
+          </ul>
+          <input type="hidden" name="plan" id="plan" value="">
+        </div></div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Choices</legend>
+      <div class="row"><span>Contact method (radio)</span>
+        <div class="choices" role="radiogroup" aria-label="Contact method">
+          <label><input type="radio" name="contact" value="email">Email</label>
+          <label><input type="radio" name="contact" value="phone">Phone</label>
+          <label><input type="radio" name="contact" value="none">Do not contact</label>
+        </div></div>
+      <div class="row"><span>Interests (checkboxes)</span>
+        <div class="choices">
+          <label><input type="checkbox" name="interests" value="design">Design</label>
+          <label><input type="checkbox" name="interests" value="engineering">Engineering</label>
+          <label><input type="checkbox" name="interests" value="music">Music</label>
+          <label><input type="checkbox" name="interests" value="travel">Travel</label>
+        </div></div>
+      <div class="row"><label for="newsletter">Newsletter (switch)</label>
+        <label class="switch"><input id="newsletter" name="newsletter" type="checkbox" role="switch"><span></span></label></div>
+      <div class="row"><span>Tags (toggle chips)</span>
+        <div class="chips" id="tags">
+          <button type="button" class="chip" aria-pressed="false" data-tag="early-adopter">Early adopter</button>
+          <button type="button" class="chip" aria-pressed="false" data-tag="student">Student</button>
+          <button type="button" class="chip" aria-pressed="false" data-tag="open-source">Open source</button>
+        </div></div>
+      <div class="row"><label for="satisfaction">Satisfaction (range)</label>
+        <div><input id="satisfaction" name="satisfaction" type="range" min="0" max="10" step="1" value="5" style="width:70%"> <output id="satisfactionOut" for="satisfaction">5</output></div></div>
+      <div class="row"><label for="color">Favorite color</label><input id="color" name="color" type="color" value="#4f5bd5"></div>
+    </fieldset>
+
+    <div class="actions">
+      <button type="submit" class="primary" id="submit">Submit</button>
+      <button type="reset" class="secondary" id="reset">Reset</button>
+    </div>
+  </form>
+
+  <h2 style="font-size:16px;margin:24px 0 8px">Submitted data</h2>
+  <div id="result" aria-live="polite">Nothing submitted yet.</div>
+
+</main>
+
+<!-- Fixed panel so the log stays on screen while the form is being filled. -->
+<aside id="eventPanel" aria-label="Event log panel" style="position:fixed;top:12px;right:12px;width:420px;background:#fff;border:1px solid #d8dbe6;border-radius:10px;padding:10px 12px;box-shadow:0 8px 24px rgba(0,0,0,.08)">
+  <h2 style="font-size:14px;margin:0 0 6px">Event log</h2>
+  <p style="font-size:12px;color:#5b6078;margin:0 0 6px">Last pointer and keyboard events the page received (newest first).</p>
+  <ol id="eventLog" aria-label="Event log" style="font-family:ui-monospace,Menlo,monospace;font-size:11px;margin:0;padding-left:18px"><li>No events yet.</li></ol>
+</aside>
+
+<script>
+  const $ = (s) => document.querySelector(s);
+  const form = $("#signup");
+
+  // Custom dropdown (ARIA listbox)
+  const planButton = $("#planButton"), planList = $("#planList"), planInput = $("#plan");
+  planButton.addEventListener("click", () => {
+    const open = planList.hidden;
+    planList.hidden = !open;
+    planButton.setAttribute("aria-expanded", String(open));
+  });
+  planList.querySelectorAll("li").forEach((li) => {
+    li.addEventListener("click", () => {
+      planList.querySelectorAll("li").forEach((o) => o.setAttribute("aria-selected", "false"));
+      li.setAttribute("aria-selected", "true");
+      planInput.value = li.dataset.value;
+      planButton.textContent = li.textContent;
+      planList.hidden = true;
+      planButton.setAttribute("aria-expanded", "false");
+    });
+  });
+  document.addEventListener("click", (e) => {
+    if (!$("#planDropdown").contains(e.target)) { planList.hidden = true; planButton.setAttribute("aria-expanded", "false"); }
+  });
+
+  // Toggle chips
+  $("#tags").addEventListener("click", (e) => {
+    const chip = e.target.closest(".chip");
+    if (!chip) return;
+    chip.setAttribute("aria-pressed", chip.getAttribute("aria-pressed") === "true" ? "false" : "true");
+  });
+
+  // Range output
+  $("#satisfaction").addEventListener("input", (e) => { $("#satisfactionOut").textContent = e.target.value; });
+
+  // Event log: records where pointer and key events land so automation tools can verify their input.
+  const eventLog = $("#eventLog");
+  const describe = (el) => el.id ? `#${el.id}` : (el.closest && el.closest("label") ? `label(${el.closest("label").textContent.trim()})` : el.tagName.toLowerCase());
+  const logEvent = (text) => {
+    if (eventLog.firstElementChild && eventLog.firstElementChild.textContent === "No events yet.") eventLog.firstElementChild.remove();
+    const li = document.createElement("li");
+    li.textContent = text;
+    eventLog.prepend(li);
+    while (eventLog.children.length > 12) eventLog.lastElementChild.remove();
+  };
+  for (const type of ["mousedown", "mouseup", "click"]) {
+    document.addEventListener(type, (e) => logEvent(`${type} at ${Math.round(e.clientX)},${Math.round(e.clientY)} on ${describe(e.target)} button=${e.button} trusted=${e.isTrusted}`), true);
+  }
+  document.addEventListener("keydown", (e) => logEvent(`keydown ${e.key} on ${describe(e.target)}`), true);
+  document.addEventListener("focusin", (e) => logEvent(`focus ${describe(e.target)}`), true);
+
+  form.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const fd = new FormData(form);
+    const data = {};
+    for (const [k, v] of fd.entries()) {
+      if (k in data) { data[k] = [].concat(data[k], v); } else { data[k] = v; }
+    }
+    data.interests = fd.getAll("interests");
+    data.languages = fd.getAll("languages");
+    data.newsletter = fd.has("newsletter");
+    data.tags = [...document.querySelectorAll('.chip[aria-pressed="true"]')].map((c) => c.dataset.tag);
+    if (data.password) data.password = "*".repeat(data.password.length);
+    $("#result").textContent = JSON.stringify(data, null, 2);
+  });
+  form.addEventListener("reset", () => {
+    setTimeout(() => {
+      planInput.value = ""; planButton.textContent = "Select a plan";
+      planList.querySelectorAll("li").forEach((o) => o.setAttribute("aria-selected", "false"));
+      document.querySelectorAll(".chip").forEach((c) => c.setAttribute("aria-pressed", "false"));
+      $("#satisfactionOut").textContent = "5";
+      $("#result").textContent = "Nothing submitted yet.";
+    }, 0);
+  });
+</script>
+</body>
+</html>

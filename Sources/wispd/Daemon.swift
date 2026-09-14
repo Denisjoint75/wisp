@@ -454,6 +454,9 @@ actor Daemon {
         var tOpts = TreeTransform.Options()
         tOpts.clip = UIRect(x: 0, y: 0, w: snap.viewport.width, h: snap.viewport.height)
         tOpts.maxChildren = policy.maxChildren
+        // A web page is one scrollable document: keep controls below the fold (marked offscreen) so they can be
+        // targeted; clicking one scrolls it into view first. Dropping them would hide most of a long form.
+        tOpts.dropOffscreen = false
         let root = TreeTransform.apply(snap.root, options: tOpts)
         let header = "# Chrome tab \(t.id.prefix(8)) — \"\(snap.title)\" \(snap.url) (viewport \(Int(snap.viewport.width))x\(Int(snap.viewport.height)))"
         var instructions: String? = nil
@@ -653,13 +656,15 @@ actor Daemon {
             if let at = at { return (resolvePoint(at, session: s, window: w, space: space), nil) }
             throw WispError(.invalidParams, "action needs `el` or `at`")
         }
-        /// Sheets, popovers and menus are separate CGWindows; target whichever of the app's windows is under the point.
-        func windowID(at p: CGPoint) -> CGWindowID? { AppResolver.window(under: p, preferring: s.pid)?.id ?? w.id }
+        /// Sheets, popovers and menus are separate CGWindows; address whichever of the app's windows (or of a panel
+        /// helper drawing for it) is under the point, falling back to the session window. Unrelated windows on top
+        /// are ignored so the click still reaches the target.
+        func windowID(at p: CGPoint) -> CGWindowID? { AppResolver.pointerTarget(at: p, pid: s.pid)?.id ?? w.id }
         func deliveryFor(point p: CGPoint, element: UINode?) -> Delivery {
             if case .hid = delivery { return .hid }
             if let ax = element?.handle as? AXEl, ax.pid > 0, ax.pid != s.pid { return .pid(ax.pid) }
-            if let hit = AppResolver.window(under: p, preferring: s.pid), hit.pid != s.pid {
-                Log.debug("pointer target at \(p) is out-of-process: \(hit.owner) pid \(hit.pid)")
+            if let hit = AppResolver.pointerTarget(at: p, pid: s.pid), hit.pid != s.pid {
+                Log.debug("pointer target at \(p) is an out-of-process panel: \(hit.owner) pid \(hit.pid)")
                 return .pid(hit.pid)
             }
             return delivery
