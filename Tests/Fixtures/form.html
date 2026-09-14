@@ -118,6 +118,19 @@
       <div class="row"><label for="color">Favorite color</label><input id="color" name="color" type="color" value="#4f5bd5"></div>
     </fieldset>
 
+    <fieldset>
+      <legend>Files and dialogs</legend>
+      <div class="row"><label for="attachment">Attachment (file input)</label><input id="attachment" name="attachment" type="file"></div>
+      <div class="row"><span>Attached file name</span><output id="attachmentName" for="attachment">none</output></div>
+      <div class="row"><span>JavaScript dialogs</span>
+        <div class="choices">
+          <button type="button" class="secondary" id="confirmBtn">Show confirm()</button>
+          <button type="button" class="secondary" id="alertBtn">Show alert()</button>
+          <button type="button" class="secondary" id="promptBtn">Show prompt()</button>
+        </div></div>
+      <div class="row"><span>Last dialog result</span><output id="dialogResult">none</output></div>
+    </fieldset>
+
     <div class="actions">
       <button type="submit" class="primary" id="submit">Submit</button>
       <button type="reset" class="secondary" id="reset">Reset</button>
@@ -170,6 +183,15 @@
 
   // Range output
   $("#satisfaction").addEventListener("input", (e) => { $("#satisfactionOut").textContent = e.target.value; });
+
+  // File input and JavaScript dialogs (used to test upload and dialog handling over the DevTools Protocol).
+  $("#attachment").addEventListener("change", (e) => {
+    const f = e.target.files && e.target.files[0];
+    $("#attachmentName").textContent = f ? `${f.name} (${f.size} bytes)` : "none";
+  });
+  $("#confirmBtn").addEventListener("click", () => { $("#dialogResult").textContent = "confirm: " + confirm("Proceed with the test?"); });
+  $("#alertBtn").addEventListener("click", () => { alert("This is an alert."); $("#dialogResult").textContent = "alert: closed"; });
+  $("#promptBtn").addEventListener("click", () => { $("#dialogResult").textContent = "prompt: " + prompt("Type something", "default"); });
 
   // Event log: records where pointer and key events land so automation tools can verify their input.
   const eventLog = $("#eventLog");

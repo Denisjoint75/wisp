@@ -121,12 +121,22 @@ enum AppResolver {
     static func listApps(runningOnly: Bool) -> [AppInfo] {
         var byKey: [String: AppInfo] = [:]
         var order: [String] = []
+        let cgList = (CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]) ?? []
+        let windowOwners = Set(cgList.compactMap { $0[kCGWindowOwnerPID as String] as? Int32 })
         for a in runningApps() {
             var i = info(for: a)
             let key = a.bundleIdentifier ?? a.bundleURL?.path ?? i.name
             if let p = a.bundleURL?.path, let item = MDItemCreate(kCFAllocatorDefault, p as CFString) {
                 i.lastUsed = MDItemCopyAttribute(item, kMDItemLastUsedDate) as? Date
                 i.useCount = (MDItemCopyAttribute(item, ("kMDItemUseCount" as CFString)) as? NSNumber)?.intValue
+            }
+            // Multi-process apps (Chrome, Electron) register several NSRunningApplication entries under one bundle
+            // id: keep one row per app, preferring the process that actually owns windows.
+            if let existing = byKey[key] {
+                let existingHasWindows = existing.pid.map { windowOwners.contains($0) } ?? false
+                let newHasWindows = windowOwners.contains(a.processIdentifier)
+                if newHasWindows && !existingHasWindows { byKey[key] = i }
+                continue
             }
             byKey[key] = i
             order.append(key)
