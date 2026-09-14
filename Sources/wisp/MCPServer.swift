@@ -63,11 +63,15 @@ final class MCPServer {
         Tool(name: "wisp_batch", description: "Run several actions in one round trip: steps are objects like {\"kind\":\"click\",\"el\":4}, {\"kind\":\"type\",\"text\":\"hi\"}, {\"kind\":\"key\",\"key\":\"Return\"}, {\"kind\":\"state\"}, {\"kind\":\"sleep\",\"seconds\":0.5}. Stops at the first failure; returns the final state.",
              schema: schema(["steps": ["type": "array", "items": ["type": "object"]], "observe": ["type": "boolean"]], required: ["steps"])),
         Tool(name: "wisp_launch", description: "Launch (or bring forward) an app by name/bundle id and list its windows.", schema: schema([:], required: ["app"])),
-        Tool(name: "wisp_end", description: "End the control session for an app (or all), hiding the cursor and banner.", schema: schema([:])),
+        Tool(name: "wisp_end", description: "End the control session for an app, a Chrome tab (closes it), or everything (no app/tab), hiding the cursor and banner. A bare wisp_end ends the turn: Chrome tabs you opened that are not marked deliverable/handoff are closed.", schema: schema([:])),
         Tool(name: "wisp_cancel", description: "Cancel the action currently running in the daemon.", schema: ["type": "object", "properties": [:]]),
-        Tool(name: "wisp_chrome", description: "Chrome DevTools helpers: status, launch (starts Chrome with a debug port and a dedicated profile), tabs, new (url), goto (tab,url), eval (tab, expression), close, back, forward, reload. Then use `tab` in the other tools.",
-             schema: ["type": "object", "properties": ["command": ["type": "string", "enum": ["status", "launch", "tabs", "new", "goto", "eval", "close", "back", "forward", "reload"]],
-                                                       "tab": ["type": "string"], "url": ["type": "string"], "expression": ["type": "string"], "port": ["type": "integer"], "profile": ["type": "string"]],
+        Tool(name: "wisp_chrome", description: "Chrome DevTools helpers: status, launch (starts Chrome hidden in the background with a debug port and a dedicated profile; visible=true shows it), tabs (with [agent]/[deliverable]/[handoff] marks), new (url), goto (tab,url), eval (tab, expression), close, back, forward, reload, upload (tab, files; el optional: fills the file input you clicked), dialog (tab, accept, text: answers the alert/confirm/prompt that wisp_state reports), mark (tab, mark: deliverable/handoff keep the tab past wisp_end), show (tab optional: bring Chrome forward), hide. Then use `tab` in the other tools.",
+             schema: ["type": "object", "properties": ["command": ["type": "string", "enum": ["status", "launch", "tabs", "new", "goto", "eval", "close", "back", "forward", "reload", "upload", "dialog", "mark", "show", "hide"]],
+                                                       "tab": ["type": "string"], "url": ["type": "string"], "expression": ["type": "string"], "port": ["type": "integer"], "profile": ["type": "string"],
+                                                       "files": ["type": "array", "items": ["type": "string"], "description": "Absolute paths to upload."],
+                                                       "el": ["type": "integer", "description": "File input element index for upload (optional after clicking the input)."],
+                                                       "accept": ["type": "boolean", "description": "dialog: true accepts, false dismisses."], "text": ["type": "string", "description": "dialog: prompt() answer."],
+                                                       "mark": ["type": "string", "enum": ["deliverable", "handoff", "none"]], "visible": ["type": "boolean", "description": "launch: show the window instead of starting hidden."]],
                       "required": ["command"]]),
     ]
 
@@ -231,6 +235,12 @@ final class MCPServer {
             if let e = args["expression"].string { p["expression"] = .string(e) }
             if let port = args["port"].int { p["port"] = .int(port) }
             if let prof = args["profile"].string { p["profile"] = .string(prof) }
+            if let files = args["files"].array { p["files"] = .array(files) }
+            if let el = args["el"].int { p["el"] = .int(el) }
+            if let accept = args["accept"].bool { p["accept"] = .bool(accept) }
+            if let text = args["text"].string { p["text"] = .string(text) }
+            if let m = args["mark"].string { p["mark"] = .string(m) }
+            if let v = args["visible"].bool { p["visible"] = .bool(v) }
             let method: String
             switch cmd {
             case "status": method = Proto.Method.chromeStatus
@@ -243,12 +253,17 @@ final class MCPServer {
             case "back": method = Proto.Method.chromeTabBack
             case "forward": method = Proto.Method.chromeTabForward
             case "reload": method = Proto.Method.chromeTabReload
+            case "upload": method = Proto.Method.chromeTabUpload
+            case "dialog": method = Proto.Method.chromeTabDialog
+            case "mark": method = Proto.Method.chromeTabMark
+            case "show": method = Proto.Method.chromeShow
+            case "hide": method = Proto.Method.chromeHide
             default: throw WispError(.invalidParams, "unknown chrome command \(cmd)")
             }
             let r = try client.call(method, .object(p), timeout: 120)
             if !r["state"].isNull { return stateContent(r["state"]) }
             if cmd == "tabs" {
-                return [["type": "text", "text": .string((r.array ?? []).map { "\($0["id"].string ?? "")  \($0["title"].string ?? "")  \($0["url"].string ?? "")" }.joined(separator: "\n"))]]
+                return [["type": "text", "text": .string((r.array ?? []).map { "\($0["id"].string ?? "")  \($0["title"].string ?? "")  \($0["url"].string ?? "")" + ($0["mark"].string.map { "  [\($0)]" } ?? "") }.joined(separator: "\n"))]]
             }
             return [["type": "text", "text": .string(r.stringified(pretty: true))]]
         default:

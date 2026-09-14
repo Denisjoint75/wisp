@@ -32,6 +32,11 @@ public enum Proto {
         public static let chromeTabBack = "chrome.tab.back"
         public static let chromeTabForward = "chrome.tab.forward"
         public static let chromeTabReload = "chrome.tab.reload"
+        public static let chromeTabUpload = "chrome.tab.upload"
+        public static let chromeTabDialog = "chrome.tab.dialog"
+        public static let chromeTabMark = "chrome.tab.mark"
+        public static let chromeShow = "chrome.show"
+        public static let chromeHide = "chrome.hide"
         public static let daemonShutdown = "daemon.shutdown"
         public static let daemonLog = "daemon.log"
     }

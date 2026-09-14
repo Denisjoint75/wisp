@@ -268,7 +268,14 @@ actor Daemon {
                 for s in sessions.values { endSession(s) }
                 sessions.removeAll()
             }
-            if let t = params["tab"].string { chrome.dropTab(t) }
+            if let t = params["tab"].string {
+                // Ending a tab closes it: a tab the agent is done with has no reason to stay open.
+                if let tab = try? await chrome.tab(t) { try? await chrome.closeTab(id: tab.id) }
+                chrome.dropTab(t)
+            } else if params["app"].isNull {
+                // A bare `wisp end` is the end of the turn: unmarked agent tabs are scratch and go away, marks reset.
+                await chrome.endTurn()
+            }
             setActive(nil)
             return ["result": ["ok": true]]
         case Proto.Method.sessionStatus:
@@ -323,10 +330,14 @@ actor Daemon {
         case Proto.Method.chromeLaunch:
             let requested = params["port"].int ?? policy.chromePort
             let profile = params["profile"].string.map { URL(fileURLWithPath: $0) } ?? WispPaths.chromeProfileDir
-            let port = try await ChromeBackend.launch(port: requested, profile: profile, url: params["url"].string, app: params["app"].string ?? "Google Chrome")
-            chrome = ChromeBackend(port: port)
+            if let u = params["url"].string { try checkBlockedURL(u) }
+            let launched = try await ChromeBackend.launch(port: requested, profile: profile, url: params["url"].string, app: params["app"].string ?? "Google Chrome",
+                                                          visible: params["visible"].bool ?? false)
+            // Keep the backend (and this turn's tab marks) when the running Wisp Chrome was reused.
+            if launched.port != chrome.port { chrome = ChromeBackend(port: launched.port) }
+            chrome.registerAgentTabs(launched.tabs)
             let tabs = try await chrome.listTabs()
-            return ["result": ["ok": true, "port": .int(port), "profile": .string(profile.path), "tabs": .array(tabs.map { $0.json })]]
+            return ["result": ["ok": true, "port": .int(launched.port), "profile": .string(profile.path), "hidden": .bool(chrome.isHidden), "tabs": .array(tabs.map { $0.json })]]
         case Proto.Method.chromeTabs:
             return ["result": .array(try await chrome.listTabs().map { $0.json })]
         case Proto.Method.chromeTabNew:
@@ -358,6 +369,38 @@ actor Daemon {
             await tab.waitForQuiet(min: 0.3, quiet: policy.settleQuiet, max: policy.settleMax)
             let state = (params["observe"].bool ?? true) ? try await captureState(.tab(tab), options: StateOptions.parse(params)) : .null
             return ["result": ["ok": true, "tab": tab.info.json, "state": state]]
+        case Proto.Method.chromeTabUpload:
+            let tab = try await chrome.tab(params["tab"].string ?? "active")
+            let files = (params["files"].array ?? []).compactMap { $0.string }
+            guard !files.isEmpty else { throw WispError(.invalidParams, "upload needs `files` (absolute paths)") }
+            for f in files {
+                guard f.hasPrefix("/") else { throw WispError(.invalidParams, "file path must be absolute: \(f)") }
+                var isDir: ObjCBool = false
+                guard FileManager.default.fileExists(atPath: f, isDirectory: &isDir), !isDir.boolValue else { throw WispError(.invalidParams, "file not found: \(f)") }
+            }
+            var node: Int? = nil
+            if let el = params["el"].int {
+                let n = try self.node(el, in: tab.revisions)
+                guard let bid = n.handle as? Int else { throw WispError(.invalidElement, "element [\(el)] has no DOM node") }
+                node = bid
+            }
+            return ["result": try await tabAction(tab, kind: "upload", params: params) { try await tab.setFiles(backendNodeId: node, files: files) }]
+        case Proto.Method.chromeTabDialog:
+            let tab = try await chrome.tab(params["tab"].string ?? "active")
+            guard let accept = params["accept"].bool else { throw WispError(.invalidParams, "dialog needs `accept` (true to accept, false to dismiss)") }
+            guard tab.dialog != nil else { throw WispError(.actionNotAvailable, "no JavaScript dialog is open in tab \(tab.id.prefix(8))") }
+            return ["result": try await tabAction(tab, kind: "dialog", params: params) { try await tab.handleDialog(accept: accept, text: params["text"].string) }]
+        case Proto.Method.chromeTabMark:
+            let tab = try await chrome.tab(params["tab"].string ?? "active")
+            guard let m = ChromeBackend.Mark(rawValue: params["mark"].string ?? "") else { throw WispError(.invalidParams, "mark must be deliverable, handoff or none") }
+            chrome.mark(tab: tab.id, m)
+            return ["result": ["ok": true, "tab": .string(tab.id), "mark": .string(m.label)]]
+        case Proto.Method.chromeShow:
+            try await chrome.show(tab: params["tab"].string)
+            return ["result": ["ok": true, "hidden": .bool(chrome.isHidden)]]
+        case Proto.Method.chromeHide:
+            await chrome.hide()
+            return ["result": ["ok": true, "hidden": .bool(chrome.isHidden)]]
         case Proto.Method.daemonShutdown:
             Task { try? await Task.sleep(nanoseconds: 100_000_000); Daemon.shared.shutdown() }
             return ["result": ["ok": true]]
@@ -617,10 +660,36 @@ actor Daemon {
         return result
     }
 
+    /// A DevTools-only action (file upload, dialog answer) that is not a `UIAction`: runs it with the acting lens,
+    /// then returns the same `{ok, action, state}` shape as `perform`.
+    private func tabAction(_ t: ChromeTab, kind: String, params: JSON, _ body: () async throws -> Void) async throws -> JSON {
+        try checkScreenLock()
+        cancelToken.reset()
+        busy = true
+        defer { busy = false }
+        setActive("Chrome tab")
+        await setActivity(.acting, anchor: await t.windowFrame())
+        defer { postActivity(.idle) }
+        try await body()
+        t.needsSettle = true
+        t.lastActionAt = Date()
+        var out: [String: JSON] = ["ok": true, "action": .string(kind), "tab": t.info.json]
+        if params["observe"].bool ?? true { out["state"] = try await captureState(.tab(t), options: StateOptions.parse(params)) }
+        return .object(out)
+    }
+
     private func captureTabState(_ t: ChromeTab, options: StateOptions) async throws -> JSON {
         setActive("Chrome tab")
         await setActivity(.observing, anchor: await t.windowFrame())
         defer { postActivity(.idle) }
+        if let d = t.dialog {
+            // The renderer is blocked by the dialog: no tree, no evaluate. Report the dialog and how to answer it.
+            let header = "# Chrome tab \(t.id.prefix(8)) — \"\(t.info.title)\" \(t.info.url)"
+            let note = "# JavaScript \(d.type) dialog is open: \"\(d.message)\" — use `wisp chrome dialog --tab \(t.id.prefix(8)) accept|dismiss [--text S]`"
+            return ["target": ["kind": "tab", "tab": t.info.json], "revision": .int(t.revisions.latest?.id ?? 0), "mode": "dialog",
+                    "text": .string(header + "\n" + note), "settled": true, "elements": 0, "lines": 2,
+                    "dialog": ["type": .string(d.type), "message": .string(d.message)]]
+        }
         var settled = true
         if t.needsSettle {
             await t.waitForQuiet(min: policy.settleMin, quiet: policy.settleQuiet, max: policy.settleMax)
@@ -1103,7 +1172,8 @@ actor Daemon {
             throw WispError(.blockedURL, "\(host) is blocked by policy; the tab is on that host")
         }
         let cursor = await MainActor.run { CursorOverlay.shared }
-        let useCursor = policy.cursorEnabled && (params["cursor"].bool ?? true)
+        // A hidden Chrome has nothing on screen to point at; CDP input works regardless.
+        let useCursor = policy.cursorEnabled && (params["cursor"].bool ?? true) && !chrome.isHidden
         let space = params["space"].string
 
         func viewportPoint(_ at: (Double, Double)) -> CGPoint {

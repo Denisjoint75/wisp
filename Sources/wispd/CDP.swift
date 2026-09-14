@@ -117,17 +117,31 @@ struct ChromeTabInfo {
     var url: String
     var wsURL: String?
     var type: String
+    /// Set for tabs the agent opened: `agent` (unmarked scratch tab), `deliverable` or `handoff`.
+    var mark: String?
 
-    var json: JSON { ["id": .string(id), "title": .string(title), "url": .string(url), "type": .string(type)] }
+    var json: JSON {
+        [String: JSON].compact([("id", .string(id)), ("title", .string(title)), ("url", .string(url)), ("type", .string(type)),
+                                ("mark", mark.map { .string($0) })])
+    }
 }
 
 /// Talks to a Chrome instance started with `--remote-debugging-port`.
 final class ChromeBackend {
+    /// Turn-scoped label on a tab the agent opened. Unmarked (`none`) tabs are scratch and closed by `endTurn()`;
+    /// `deliverable` and `handoff` tabs survive the turn. The label shown in tab lists is `agent` for `none`.
+    enum Mark: String { case none, deliverable, handoff
+        var label: String { self == .none ? "agent" : rawValue }
+    }
+
     var port: Int {
         didSet { ChromeBackend.persist(port: port) }
     }
     private var tabs: [String: ChromeTab] = [:]
     private var host: String?
+    /// Tabs created through Wisp (`newTab`, `launch(url:)`) and their marks for the current turn.
+    private(set) var agentTabs: [String: Mark] = [:]
+    private var appCache: NSRunningApplication?
 
     static var stateFile: URL { WispPaths.supportDir.appendingPathComponent("chrome.json") }
 
@@ -198,25 +212,104 @@ final class ChromeBackend {
 
     func listTabs() async throws -> [ChromeTabInfo] {
         let j = try await http("/json/list")
-        return (j.array ?? []).compactMap { t in
+        let list = (j.array ?? []).compactMap { t -> ChromeTabInfo? in
             guard let id = t["id"].string else { return nil }
-            return ChromeTabInfo(id: id, title: t["title"].string ?? "", url: t["url"].string ?? "", wsURL: t["webSocketDebuggerUrl"].string, type: t["type"].string ?? "")
+            return ChromeTabInfo(id: id, title: t["title"].string ?? "", url: t["url"].string ?? "", wsURL: t["webSocketDebuggerUrl"].string,
+                                 type: t["type"].string ?? "", mark: agentTabs[id]?.label)
         }.filter { $0.type == "page" }
+        // Tabs the user closed by hand are gone for good; forget their marks.
+        let open = Set(list.map { $0.id })
+        agentTabs = agentTabs.filter { open.contains($0.key) }
+        return list
     }
 
     func newTab(url: String?) async throws -> ChromeTabInfo {
         let target = url.map { "?" + ($0.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? $0) } ?? ""
         let j = try await http("/json/new" + target, method: "PUT")
         guard let id = j["id"].string else { throw WispError(.chromeUnavailable, "Chrome did not create a tab: \(j.stringified())") }
-        return ChromeTabInfo(id: id, title: j["title"].string ?? "", url: j["url"].string ?? "", wsURL: j["webSocketDebuggerUrl"].string, type: "page")
+        agentTabs[id] = Mark.none
+        return ChromeTabInfo(id: id, title: j["title"].string ?? "", url: j["url"].string ?? "", wsURL: j["webSocketDebuggerUrl"].string, type: "page", mark: Mark.none.label)
     }
 
     func closeTab(id: String) async throws {
         _ = try await http("/json/close/\(id)")
         tabs.removeValue(forKey: id)?.close()
+        agentTabs.removeValue(forKey: id)
     }
 
     func activateTab(id: String) async throws { _ = try await http("/json/activate/\(id)") }
+
+    /// Registers tabs Chrome itself opened at launch as agent tabs.
+    func registerAgentTabs(_ ids: [String]) { for id in ids where agentTabs[id] == nil { agentTabs[id] = Mark.none } }
+
+    /// Labels an agent tab for this turn; a tab the user opened becomes an agent tab once it is marked.
+    func mark(tab id: String, _ m: Mark) { agentTabs[id] = m }
+
+    /// End of turn: closes every unmarked agent tab (errors ignored) and forgets all marks; the next turn starts clean
+    /// and a `deliverable`/`handoff` tab is an ordinary user tab from then on.
+    func endTurn() async {
+        let scratch = agentTabs.filter { $0.value == Mark.none }.map { $0.key }
+        agentTabs.removeAll()
+        for id in scratch {
+            _ = try? await http("/json/close/\(id)")
+            tabs.removeValue(forKey: id)?.close()
+        }
+    }
+
+    /// The Chrome process that owns our debug port (the Wisp instance, never the user's own Chrome).
+    func runningApp() -> NSRunningApplication? {
+        if let a = appCache, !a.isTerminated { return a }
+        let needle = "--remote-debugging-port=\(port)"
+        for app in NSWorkspace.shared.runningApplications {
+            guard let bid = app.bundleIdentifier?.lowercased(), bid.contains("chrome") || bid.contains("chromium"), !bid.contains("helper") else { continue }
+            if ChromeBackend.processArgs(app.processIdentifier).contains(needle) { appCache = app; return app }
+        }
+        return nil
+    }
+
+    private static func processArgs(_ pid: pid_t) -> String {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/bin/ps")
+        p.arguments = ["-ww", "-o", "args=", "-p", String(pid)]
+        let pipe = Pipe()
+        p.standardOutput = pipe
+        p.standardError = FileHandle.nullDevice
+        guard (try? p.run()) != nil else { return "" }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    /// Whether the Wisp Chrome is hidden (launched in the background or `hide()`); the overlay cursor is pointless then.
+    var isHidden: Bool { runningApp()?.isHidden ?? false }
+
+    /// Brings the Wisp Chrome forward (optionally switching to a tab first).
+    func show(tab spec: String?) async throws {
+        if let spec = spec {
+            let t = try await tab(spec)
+            try await activateTab(id: t.id)
+        }
+        guard let app = runningApp() else { throw WispError(.chromeUnavailable, "the Wisp Chrome process is not running (use `wisp chrome launch`)") }
+        if app.isHidden {
+            await MainActor.run { _ = app.unhide() }
+            for _ in 0..<20 where app.isHidden { try? await Task.sleep(nanoseconds: 50_000_000) }
+        }
+        // wispd is never the active app, so the cooperative macOS 14 `activate()` is refused. Accessibility can make
+        // any app frontmost from the background; the activation call is kept as a second attempt.
+        let ax = AXEl.app(pid: app.processIdentifier)
+        _ = ax.set(kAXFrontmostAttribute, true)
+        (ax.focusedWindow ?? ax.windows.first)?.perform(kAXRaiseAction)
+        await MainActor.run { _ = app.activate(options: [.activateIgnoringOtherApps, .activateAllWindows]) }
+        for _ in 0..<20 where NSWorkspace.shared.frontmostApplication?.processIdentifier != app.processIdentifier {
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+    }
+
+    /// Hides the Wisp Chrome (all of its windows); CDP keeps working while hidden.
+    func hide() async {
+        guard let app = runningApp() else { return }
+        await MainActor.run { _ = app.hide() }
+    }
 
     /// Resolves a tab by id, id prefix, "active"/"current", or a substring of its title/URL.
     func tab(_ spec: String) async throws -> ChromeTab {
@@ -247,21 +340,26 @@ final class ChromeBackend {
     /// Forgets every cached revision of the open tabs (the next `state` returns a full tree).
     func resetRevisions() { for t in tabs.values { t.revisions.reset() } }
 
-    static func launch(port requested: Int, profile: URL, url: String?, app: String = "Google Chrome") async throws -> Int {
+    /// Starts (or reuses) the Wisp Chrome. Returns the debug port and the ids of the tabs this call opened, which the
+    /// caller registers as agent tabs. `visible: false` launches Chrome hidden and in the background so the user's
+    /// frontmost app does not change (`wisp chrome show` brings it forward later).
+    static func launch(port requested: Int, profile: URL, url: String?, app: String = "Google Chrome", visible: Bool = false) async throws -> (port: Int, tabs: [String]) {
         try? FileManager.default.createDirectory(at: profile, withIntermediateDirectories: true)
         // Reuse a Wisp Chrome that is already running on the recorded port.
         if let d = FileManager.default.contents(atPath: stateFile.path), let j = try? JSON.parse(d), let p = j["port"].int {
             let existing = ChromeBackend(port: p)
             if (try? await existing.version()) != nil {
-                if let u = url { _ = try? await existing.newTab(url: u) }
-                return p
+                var opened: [String] = []
+                if let u = url, let t = try? await existing.newTab(url: u) { opened.append(t.id) }
+                return (p, opened)
             }
         }
         let port = freePort(preferred: requested)
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-        var args = ["-na", app, "--args", "--remote-debugging-port=\(port)", "--user-data-dir=\(profile.path)",
-                    "--no-first-run", "--no-default-browser-check", "--disable-session-crashed-bubble"]
+        var args = visible ? ["-n", "-a", app] : ["-g", "-j", "-n", "-a", app]
+        args += ["--args", "--remote-debugging-port=\(port)", "--user-data-dir=\(profile.path)",
+                 "--no-first-run", "--no-default-browser-check", "--disable-session-crashed-bubble"]
         if let u = url { args.append(u) } else { args.append("about:blank") }
         p.arguments = args
         try p.run()
@@ -270,7 +368,11 @@ final class ChromeBackend {
         persist(port: port)
         let backend = ChromeBackend(port: port)
         for _ in 0..<60 {
-            if (try? await backend.version()) != nil { return port }
+            if (try? await backend.version()) != nil {
+                // Everything Chrome opened at startup (the URL or about:blank) is the agent's.
+                let tabs = ((try? await backend.listTabs()) ?? []).map { $0.id }
+                return (port, tabs)
+            }
             try? await Task.sleep(nanoseconds: 250_000_000)
         }
         throw WispError(.chromeUnavailable, "Chrome started but the debug port \(port) did not come up")
@@ -290,22 +392,50 @@ final class ChromeTab {
     private var lastAXUpdate = Date.distantPast
     private var lastNavigationStart = Date.distantPast
     var lastActionAt = Date.distantPast
+    /// Events arrive on the socket's queue; the two pending records are read from the daemon actor.
+    private let eventLock = NSLock()
+    private var pendingChooser: (backendNodeId: Int?, mode: String)?
+    private var pendingDialog: (type: String, message: String, defaultPrompt: String?)?
 
     init(info: ChromeTabInfo, conn: CDPConnection) {
         self.info = info
         self.conn = conn
-        conn.onEvent = { [weak self] method, _ in
+        conn.onEvent = { [weak self] method, params in
             guard let self = self else { return }
             switch method {
             case "Page.loadEventFired", "Page.frameStoppedLoading", "Page.domContentEventFired": self.lastLoadEvent = Date()
             case "Page.frameStartedLoading", "Page.frameStartedNavigating", "Page.frameNavigated": self.lastNavigationStart = Date()
             case "Accessibility.nodesUpdated", "Accessibility.loadComplete": self.lastAXUpdate = Date()
+            case "Page.fileChooserOpened":
+                self.eventLock.lock()
+                self.pendingChooser = (params["backendNodeId"].int, params["mode"].string ?? "selectSingle")
+                self.eventLock.unlock()
+            case "Page.javascriptDialogOpening":
+                self.eventLock.lock()
+                self.pendingDialog = (params["type"].string ?? "dialog", params["message"].string ?? "", params["defaultPrompt"].string)
+                self.eventLock.unlock()
+            case "Page.javascriptDialogClosed":
+                self.eventLock.lock()
+                self.pendingDialog = nil
+                self.eventLock.unlock()
             default: break
             }
         }
     }
 
     var id: String { info.id }
+
+    /// The JavaScript dialog (alert/confirm/prompt/beforeunload) currently blocking the page, if any. While it is up
+    /// the renderer is stopped: no snapshot, no evaluate, no settle; only `handleDialog` moves on.
+    var dialog: (type: String, message: String)? {
+        eventLock.lock(); defer { eventLock.unlock() }
+        return pendingDialog.map { ($0.type, $0.message) }
+    }
+
+    private var chooserNode: Int? {
+        eventLock.lock(); defer { eventLock.unlock() }
+        return pendingChooser?.backendNodeId
+    }
 
     func close() { conn.close() }
 
@@ -316,7 +446,56 @@ final class ChromeTab {
         _ = try await conn.send("Runtime.enable")
         _ = try? await conn.send("Accessibility.enable")
         _ = try? await conn.send("DOM.getDocument", ["depth": 0])
+        // Clicking a file input reports `Page.fileChooserOpened` instead of opening the native panel; `setFiles`
+        // then fills it. Focus emulation keeps the page believing it is focused while Chrome sits hidden in the background.
+        _ = try? await conn.send("Page.setInterceptFileChooserDialog", ["enabled": true])
+        _ = try? await conn.send("Emulation.setFocusEmulationEnabled", ["enabled": true])
         domainsEnabled = true
+    }
+
+    /// Fills a file input: the given node, else the input whose chooser the last click opened.
+    func setFiles(backendNodeId: Int?, files: [String]) async throws {
+        guard let node = backendNodeId ?? chooserNode else {
+            throw WispError(.invalidParams, "no file input targeted; click the file input first or pass --el")
+        }
+        _ = try await conn.send("DOM.setFileInputFiles", ["files": .array(files.map { .string($0) }), "backendNodeId": .int(node)])
+        clearPending(chooser: true, dialog: false)
+    }
+
+    private func clearPending(chooser: Bool, dialog: Bool) {
+        eventLock.lock(); defer { eventLock.unlock() }
+        if chooser { pendingChooser = nil }
+        if dialog { pendingDialog = nil }
+    }
+
+    /// Accepts or dismisses the open JavaScript dialog (`text` answers a prompt).
+    func handleDialog(accept: Bool, text: String?) async throws {
+        var params: [String: JSON] = ["accept": .bool(accept)]
+        if let t = text { params["promptText"] = .string(t) }
+        _ = try await conn.send("Page.handleJavaScriptDialog", .object(params))
+        clearPending(chooser: false, dialog: true)
+    }
+
+    /// Sends an input event. Chrome answers only once the page acknowledged the event, and a page that opens a
+    /// JavaScript dialog from its handler never does until the dialog is handled, so return as soon as one opens (the
+    /// late reply is discarded).
+    private func dispatchInput(_ method: String, _ params: JSON) async throws {
+        final class Slot {
+            private let lock = NSLock()
+            private var result: Result<JSON, Error>?
+            func set(_ r: Result<JSON, Error>) { lock.lock(); result = r; lock.unlock() }
+            func get() -> Result<JSON, Error>? { lock.lock(); defer { lock.unlock() }; return result }
+        }
+        let slot = Slot()
+        let conn = self.conn
+        Task {
+            do { slot.set(.success(try await conn.send(method, params))) } catch { slot.set(.failure(error)) }
+        }
+        while true {
+            if let r = slot.get() { _ = try r.get(); return }
+            if dialog != nil { return }
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
     }
 
     struct Viewport { var width: Double; var height: Double; var scrollX: Double; var scrollY: Double; var dpr: Double }
@@ -472,6 +651,7 @@ final class ChromeTab {
     private struct WindowMetrics { var x, y, outerWidth, outerHeight, innerHeight: Double }
 
     private func windowMetrics() async -> WindowMetrics? {
+        if dialog != nil { return nil }
         let expr = "JSON.stringify({x:window.screenX,y:window.screenY,oh:window.outerHeight,ih:window.innerHeight,ow:window.outerWidth,iw:window.innerWidth})"
         guard let r = try? await conn.send("Runtime.evaluate", ["expression": .string(expr), "returnByValue": true]),
               let s = r["result"]["value"].string, let j = try? JSON.parse(s),
@@ -493,19 +673,19 @@ final class ChromeTab {
     func click(at p: CGPoint, button: MouseButton, count: Int, modifiers: Int = 0, clickInterval: Double,
                beforeDown: (() async -> Void)? = nil, afterUp: (() async -> Void)? = nil) async throws {
         let b = button.rawValue
-        _ = try await conn.send("Input.dispatchMouseEvent", ["type": "mouseMoved", "x": .number(p.x), "y": .number(p.y), "button": "none", "modifiers": .int(modifiers)])
+        try await dispatchInput("Input.dispatchMouseEvent", ["type": "mouseMoved", "x": .number(p.x), "y": .number(p.y), "button": "none", "modifiers": .int(modifiers)])
         for i in 1...max(1, count) {
             await beforeDown?()
-            _ = try await conn.send("Input.dispatchMouseEvent", ["type": "mousePressed", "x": .number(p.x), "y": .number(p.y), "button": .string(b), "clickCount": .int(i), "modifiers": .int(modifiers)])
+            try await dispatchInput("Input.dispatchMouseEvent", ["type": "mousePressed", "x": .number(p.x), "y": .number(p.y), "button": .string(b), "clickCount": .int(i), "modifiers": .int(modifiers)])
             try? await Task.sleep(nanoseconds: UInt64(clickInterval * 1_000_000_000))
-            _ = try await conn.send("Input.dispatchMouseEvent", ["type": "mouseReleased", "x": .number(p.x), "y": .number(p.y), "button": .string(b), "clickCount": .int(i), "modifiers": .int(modifiers)])
+            try await dispatchInput("Input.dispatchMouseEvent", ["type": "mouseReleased", "x": .number(p.x), "y": .number(p.y), "button": .string(b), "clickCount": .int(i), "modifiers": .int(modifiers)])
             await afterUp?()
             if i < count { try? await Task.sleep(nanoseconds: 80_000_000) }
         }
     }
 
     func mouse(_ type: String, at p: CGPoint, button: MouseButton = .left) async throws {
-        _ = try await conn.send("Input.dispatchMouseEvent", ["type": .string(type), "x": .number(p.x), "y": .number(p.y), "button": .string(type == "mouseMoved" ? "none" : button.rawValue), "clickCount": 1])
+        try await dispatchInput("Input.dispatchMouseEvent", ["type": .string(type), "x": .number(p.x), "y": .number(p.y), "button": .string(type == "mouseMoved" ? "none" : button.rawValue), "clickCount": 1])
     }
 
     func drag(from a: CGPoint, to b: CGPoint) async throws {
@@ -561,9 +741,9 @@ final class ChromeTab {
                                     "windowsVirtualKeyCode": .int(vk), "nativeVirtualKeyCode": .int(vk), "modifiers": .int(mods)]
         if let t = text { down["text"] = .string(t); down["unmodifiedText"] = .string(t) }
         if mods & 4 != 0 { down["commands"] = commandsFor(key: k) }
-        _ = try await conn.send("Input.dispatchKeyEvent", .object(down))
+        try await dispatchInput("Input.dispatchKeyEvent", .object(down))
         try? await Task.sleep(nanoseconds: 20_000_000)
-        _ = try await conn.send("Input.dispatchKeyEvent", ["type": "keyUp", "key": .string(k), "code": .string(code), "windowsVirtualKeyCode": .int(vk), "modifiers": .int(mods)])
+        try await dispatchInput("Input.dispatchKeyEvent", ["type": "keyUp", "key": .string(k), "code": .string(code), "windowsVirtualKeyCode": .int(vk), "modifiers": .int(mods)])
     }
 
     /// Editing commands Chrome expects for ⌘-shortcuts on macOS.
@@ -717,6 +897,8 @@ final class ChromeTab {
         let start = Date()
         try? await Task.sleep(nanoseconds: UInt64(min * 1_000_000_000))
         while Date().timeIntervalSince(start) < max {
+            // A JavaScript dialog stops the renderer; nothing settles until it is handled.
+            if dialog != nil { needsSettle = false; return }
             let navStarted = lastNavigationStart > lastActionAt.addingTimeInterval(-0.05)
             let loaded = lastLoadEvent >= lastNavigationStart
             let readyState = (try? await conn.send("Runtime.evaluate", ["expression": "document.readyState", "returnByValue": true], timeout: 3))?["result"]["value"].string
@@ -738,6 +920,7 @@ final class ChromeTab {
           tick();
         })
         """
+        if dialog != nil { needsSettle = false; return }
         _ = try? await conn.send("Runtime.evaluate", ["expression": .string(expr), "awaitPromise": true, "returnByValue": true], timeout: max + 2)
         needsSettle = false
     }

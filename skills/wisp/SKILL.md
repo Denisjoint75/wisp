@@ -106,7 +106,8 @@ Interruptions and reporting
   re-read state before continuing.
 - When the user asked for a screenshot, include it in the final answer (the returned path, or the image over MCP).
 - Chrome tabs you open are scratch: `wisp end` closes them. If a tab is a deliverable or a hand-off for the user,
-  leave it open and say so. Keep the browser in the background unless the user wants to watch.
+  mark it with `wisp chrome mark --tab T deliverable|handoff` so it survives `wisp end`, leave it open and say so
+  (marks reset each turn). Keep the browser in the background unless the user wants to watch.
 - Run `wisp end --app X` (or `wisp end --tab <id>`) when finished so the cursor and banner go away.
 
 ## Confirmations
@@ -132,10 +133,15 @@ user; do not retry or look for another way in.
 ## Chrome
 
 ```bash
-wisp chrome launch                      # starts Chrome with a debug port and a dedicated profile
+wisp chrome launch                      # starts Chrome hidden in the background with a debug port and a dedicated profile
 wisp chrome new https://example.com     # returns a tab id
 wisp state --tab <id>
 wisp click --tab <id> --el 5; wisp set --tab <id> --el 9 "query"; wisp key --tab <id> Return
 wisp chrome eval --tab <id> "document.title"
+wisp chrome upload --tab <id> [--el N] /abs/file.pdf   # fills a file input (click it first, or pass --el); no picker opens
+wisp chrome dialog --tab <id> accept|dismiss [--text S] # answers the alert/confirm/prompt the state reports as open
+wisp chrome show [--tab <id>] | wisp chrome hide       # bring the Wisp Chrome forward for the user, hide it again
+wisp chrome mark --tab <id> deliverable|handoff        # keep the tab past `wisp end`
 ```
 Chrome tabs support the same actions; `set` dispatches proper input/change events, `chrome goto/back/forward/reload` navigate.
+`wisp chrome tabs` tags the tabs you opened `[agent]`, `[deliverable]` or `[handoff]`.

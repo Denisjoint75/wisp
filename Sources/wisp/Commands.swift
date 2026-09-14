@@ -22,7 +22,10 @@ struct Output {
                 print("\(running)  \(a["name"].string ?? "")  \(a["bundleId"].string ?? a["path"].string ?? "")")
             }
         case "tabs":
-            for t in r.array ?? [] { print("\(t["id"].string ?? "")  \(t["title"].string ?? "")  \(t["url"].string ?? "")") }
+            for t in r.array ?? [] {
+                let tag = t["mark"].string.map { "  [\($0)]" } ?? ""
+                print("\(t["id"].string ?? "")  \(t["title"].string ?? "")  \(t["url"].string ?? "")\(tag)")
+            }
         case "windows":
             for w in r["windows"].array ?? [] {
                 print("\(w["id"].int.map { String($0) } ?? "?")\t\(w["focused"].bool == true ? "*" : " ")\t\(w["title"].string ?? "")\t\(w["frame"].stringified())")
@@ -299,6 +302,7 @@ enum Commands {
                     if let port = a.int("port") { p["port"] = .int(port) }
                     if let prof = a.value("profile") { p["profile"] = .string(prof) }
                     if let u = a.value("url") ?? a.rest.dropFirst().first { p["url"] = .string(u) }
+                    if a.flag("visible") { p["visible"] = true }
                     result = try client.call(Proto.Method.chromeLaunch, p, timeout: 60)
                 case "tabs": result = try client.call(Proto.Method.chromeTabs); kind = "tabs"
                 case "new":
@@ -323,7 +327,36 @@ enum Commands {
                     let m = sub == "back" ? Proto.Method.chromeTabBack : sub == "forward" ? Proto.Method.chromeTabForward : Proto.Method.chromeTabReload
                     result = try client.call(m, p, timeout: 120)
                     if !result["state"].isNull { kind = "perform" }
-                default: throw WispError(.invalidParams, "chrome status|launch|tabs|new|goto|eval|close|back|forward|reload")
+                case "upload":
+                    let files = a.rest.dropFirst().map { $0.hasPrefix("/") ? $0 : FileManager.default.currentDirectoryPath + "/" + $0 }
+                    guard !files.isEmpty else { throw WispError(.invalidParams, "chrome upload needs --tab T [--el N] /path/to/file ...") }
+                    if let el = a.int("el", "e") { p["el"] = .int(el) }
+                    p["files"] = .array(files.map { .string($0) })
+                    p = merge(p, stateOptions(a))
+                    if a.flag("no-observe") { p["observe"] = false }
+                    result = try client.call(Proto.Method.chromeTabUpload, p, timeout: 120); kind = "perform"
+                case "dialog":
+                    let verb = a.rest.dropFirst().first ?? ""
+                    guard verb == "accept" || verb == "dismiss" else { throw WispError(.invalidParams, "chrome dialog --tab T accept|dismiss [--text S]") }
+                    p["accept"] = .bool(verb == "accept")
+                    if let t = a.value("text") { p["text"] = .string(t) }
+                    p = merge(p, stateOptions(a))
+                    if a.flag("no-observe") { p["observe"] = false }
+                    result = try client.call(Proto.Method.chromeTabDialog, p, timeout: 120); kind = "perform"
+                case "mark":
+                    guard let m = a.rest.dropFirst().first, ["deliverable", "handoff", "none"].contains(m) else {
+                        throw WispError(.invalidParams, "chrome mark --tab T deliverable|handoff|none")
+                    }
+                    p["mark"] = .string(m)
+                    result = try client.call(Proto.Method.chromeTabMark, p)
+                    if !out.json { print("tab \(result["tab"].string ?? "") marked \(result["mark"].string ?? m)"); return 0 }
+                case "show":
+                    result = try client.call(Proto.Method.chromeShow, p)
+                    if !out.json { print("Chrome shown"); return 0 }
+                case "hide":
+                    result = try client.call(Proto.Method.chromeHide)
+                    if !out.json { print("Chrome hidden"); return 0 }
+                default: throw WispError(.invalidParams, "chrome status|launch|tabs|new|goto|eval|close|back|forward|reload|upload|dialog|mark|show|hide")
                 }
             case "log":
                 result = try client.call(Proto.Method.daemonLog, ["lines": .int(a.int("lines") ?? 60)])
@@ -461,12 +494,17 @@ enum Commands {
       Options: --space window|screenshot|screen, --no-activate, --hid, --no-cursor, plus state flags
 
     Chrome over DevTools
-      wisp chrome launch [--port 9222] [--profile DIR] [URL]   wisp chrome tabs | new [URL] | close --tab T
+      wisp chrome launch [--visible] [--port 9222] [--profile DIR] [URL]   hidden in the background unless --visible
+      wisp chrome tabs | new [URL] | close --tab T              tabs shows [agent]/[deliverable]/[handoff] tags
       wisp chrome goto --tab T URL | back | forward | reload    wisp chrome eval --tab T "document.title"
+      wisp chrome upload --tab T [--el N] /abs/file ...         fill a file input (click it first, or pass --el)
+      wisp chrome dialog --tab T accept|dismiss [--text S]      answer an alert/confirm/prompt reported by state
+      wisp chrome mark --tab T deliverable|handoff|none         keep a tab past `wisp end` (marks reset each turn)
+      wisp chrome show [--tab T] | hide                         bring the Wisp Chrome forward / hide it again
       then use --tab T with state/click/type/...
 
     Session & daemon
-      wisp cancel | end [--app X] | status | log
+      wisp cancel | end [--app X | --tab T] | status | log    bare `end` closes unmarked agent Chrome tabs
       wisp policy get | set [--allow ID ...] [--deny ID ...] [--instructions-mode merge|replace|off]
                             [--banner-text "✦ Wisp is controlling {app}"] [--banner-hint reading] [--lens on|off]
                             [--approval off|high-risk|all] [--high-risk PATTERN ...] [--forbid PATTERN ...]

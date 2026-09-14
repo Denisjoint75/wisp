@@ -106,9 +106,13 @@ wisp end --app Safari
 Chrome over DevTools (dedicated profile, no impact on your main Chrome windows):
 
 ```bash
-wisp chrome launch                         # Chrome with --remote-debugging-port (first free port from 9222) and its own profile
+wisp chrome launch                         # Chrome with --remote-debugging-port (first free port from 9222) and its own profile,
+                                           # hidden in the background (--visible shows it; `wisp chrome show`/`hide` later)
 wisp chrome new https://example.com        # -> tab id
 wisp state --tab <id>; wisp click --tab <id> --el 5; wisp chrome eval --tab <id> "document.title"
+wisp chrome upload --tab <id> [--el N] /abs/file.pdf   # fill a file input without a picker
+wisp chrome dialog --tab <id> accept|dismiss [--text S] # answer an alert/confirm/prompt (state reports it as open)
+wisp chrome mark --tab <id> deliverable|handoff        # keep a tab past `wisp end` (unmarked agent tabs are scratch)
 ```
 
 The chosen port is remembered in `~/Library/Application Support/Wisp/chrome.json`; `wisp chrome launch` reuses a
