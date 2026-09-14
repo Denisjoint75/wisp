@@ -200,6 +200,33 @@ final class ProtocolTests: XCTestCase {
         XCTAssertEqual(Policy.from(json: p.json), p)
     }
 
+    func testPolicyLensAndBannerRoundTrip() {
+        let d = Policy()
+        XCTAssertTrue(d.lensEnabled)
+        XCTAssertEqual(d.bannerText, BannerTemplate.defaultText)
+        XCTAssertEqual(d.bannerHint, BannerTemplate.defaultHint)
+        var p = Policy()
+        p.lensEnabled = false
+        p.bannerText = "Wisp drives {app}"
+        p.bannerHint = ""
+        let j = p.json
+        XCTAssertEqual(j["lensEnabled"].bool, false)
+        XCTAssertEqual(j["bannerText"].string, "Wisp drives {app}")
+        XCTAssertEqual(j["bannerHint"].string, "")
+        XCTAssertEqual(Policy.from(json: j), p)
+        XCTAssertEqual(Policy.from(json: ["bannerText": "   "]).bannerText, BannerTemplate.defaultText, "a blank template keeps the default")
+        XCTAssertEqual(Policy.from(json: ["lensEnabled": "no"]).lensEnabled, true, "non-boolean values are ignored")
+    }
+
+    func testBannerTemplateRender() {
+        XCTAssertEqual(BannerTemplate.render(BannerTemplate.defaultText, app: "TextEdit"), "✦ Wisp is controlling TextEdit  ·  Esc to stop")
+        XCTAssertEqual(BannerTemplate.render("Wisp drives {app}", app: "Safari", hint: "reading"), "Wisp drives Safari · reading")
+        XCTAssertEqual(BannerTemplate.render("{app} / {app}", app: "Mail"), "Mail / Mail", "every placeholder is substituted")
+        XCTAssertEqual(BannerTemplate.render("no placeholder", app: "Mail", hint: ""), "no placeholder", "an empty hint adds nothing")
+        XCTAssertEqual(BannerTemplate.render("x", app: "Mail", hint: "  "), "x", "a blank hint adds nothing")
+        XCTAssertEqual(BannerTemplate.render("x", app: "Mail", hint: nil), "x")
+    }
+
     func testPolicyMatching() {
         var p = Policy()
         XCTAssertEqual(p.decision(bundleId: "com.bitwarden.desktop", name: "Bitwarden", path: nil), .denied)

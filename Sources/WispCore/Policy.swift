@@ -20,6 +20,12 @@ public struct Policy: Equatable {
     /// How per-app instructions are composed: `merge` (user files replace the built-in text of the same stem),
     /// `replace` (any user match drops every built-in text) or `off`. See `InstructionCatalog.Mode`.
     public var instructionsMode: String
+    /// Shows the activity lens (the small sweeping ring next to the cursor or in the window corner).
+    public var lensEnabled: Bool
+    /// Banner template; `{app}` is replaced with the controlled app's name. See `BannerTemplate.render`.
+    public var bannerText: String
+    /// Suffix appended to the banner while Wisp is observing (reading the UI); empty disables it.
+    public var bannerHint: String
 
     public static let instructionsModes = ["merge", "replace", "off"]
 
@@ -46,6 +52,9 @@ public struct Policy: Equatable {
         maxChildren = 60
         privateWindowField = false
         instructionsMode = "merge"
+        lensEnabled = true
+        bannerText = BannerTemplate.defaultText
+        bannerHint = BannerTemplate.defaultHint
     }
 
     public var json: JSON {
@@ -55,7 +64,8 @@ public struct Policy: Equatable {
          "settleMax": .number(settleMax), "cursorEnabled": .bool(cursorEnabled), "cursorAccent": .string(cursorAccent),
          "interventionDebounce": .number(interventionDebounce), "bannerEnabled": .bool(bannerEnabled),
          "chromePort": .int(chromePort), "maxChildren": .int(maxChildren), "privateWindowField": .bool(privateWindowField),
-         "instructionsMode": .string(instructionsMode)]
+         "instructionsMode": .string(instructionsMode), "lensEnabled": .bool(lensEnabled), "bannerText": .string(bannerText),
+         "bannerHint": .string(bannerHint)]
     }
 
     public static func from(json j: JSON) -> Policy {
@@ -76,6 +86,9 @@ public struct Policy: Equatable {
         if let i = j["maxChildren"].int { p.maxChildren = max(10, min(i, 500)) }
         if let b = j["privateWindowField"].bool { p.privateWindowField = b }
         if let m = j["instructionsMode"].string?.lowercased(), Policy.instructionsModes.contains(m) { p.instructionsMode = m }
+        if let b = j["lensEnabled"].bool { p.lensEnabled = b }
+        if let s = j["bannerText"].string, !s.trimmingCharacters(in: .whitespaces).isEmpty { p.bannerText = s }
+        if let s = j["bannerHint"].string { p.bannerHint = s }
         return p
     }
 
@@ -112,5 +125,20 @@ public struct Policy: Equatable {
 
     public func usesBackground(bundleId: String?, name: String?) -> Bool {
         background.contains(where: { Policy.matches($0, [bundleId, name].compactMap { $0 }) })
+    }
+}
+
+/// The "Wisp is controlling …" banner text, computed from the policy template.
+public enum BannerTemplate {
+    public static let defaultText = "✦ Wisp is controlling {app}  ·  Esc to stop"
+    public static let defaultHint = "reading"
+    public static let appPlaceholder = "{app}"
+
+    /// Substitutes `{app}` in `template` and, when `hint` is non-empty, appends it after a " · " separator (the daemon
+    /// passes the hint only while observing).
+    public static func render(_ template: String, app: String, hint: String? = nil) -> String {
+        var text = template.replacingOccurrences(of: appPlaceholder, with: app)
+        if let h = hint?.trimmingCharacters(in: .whitespaces), !h.isEmpty { text += " · " + h }
+        return text
     }
 }

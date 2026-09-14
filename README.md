@@ -145,10 +145,17 @@ merge|replace|off`) to choose whether user files merge with, replace, or switch 
 - **Cursor:** an overlay `NSPanel` at window level 102 with a glowing arrow; motion uses the spring/path constants
   recovered from Sky (`clickAngle -44°`, scoot under 196 pt, `closeEnough` at 99.5 % / 3.2 pt); the mouse-down is
   posted only when the cursor has visually arrived.
+- **Activity lens and banner:** a small sweeping ring next to the cursor (or in the window's top-right corner while
+  the cursor is hidden) shows whether Wisp is observing or acting; it turns gray and fades after an intervention.
+  `wisp status` reports the current `activity`. The banner text is a policy template (`wisp policy set
+  --banner-text "✦ Wisp is controlling {app}" --banner-hint reading`); `--lens off` hides the ring.
 - **Settle:** `AXObserver` notifications plus busy flags; a quiet window of 0.3 s after at least 0.25 s, up to 5 s.
+  A visible progress or busy indicator in the window keeps the wait going (the state is then marked not settled).
 - **Safety:** listen-only event tap for Esc and real user input (`userIntervened`), policy file
   `~/.config/wisp/policy.json` (deny list defaults to password managers), secure fields are never read or typed
-  into unless allowed, screen-lock check, display kept awake while a session runs.
+  into unless allowed, screen-lock check before every action and batch step plus a lock monitor that cancels an
+  in-flight action the moment the screen locks (`wisp status` shows `screenLocked`), display kept awake while a
+  session runs.
 - **Chrome:** `Accessibility.getFullAXTree` + `DOMSnapshot.captureSnapshot` rendered by the same engine;
   `Input.dispatch*` for actions; `Page.captureScreenshot`; `Runtime.evaluate` for `wisp chrome eval`.
 

@@ -72,6 +72,25 @@ actor Daemon {
             StatusUI.shared.onQuit = { Daemon.shared.shutdown() }
             CursorOverlay.shared.enabled = p.cursorEnabled
             CursorOverlay.shared.setAccent(hex: p.cursorAccent)
+            CursorOverlay.shared.lensEnabled = p.lensEnabled
+            CursorOverlay.shared.onActivityChanged = { StatusUI.shared.setActivity($0) }
+            StatusUI.shared.bannerText = p.bannerText
+            StatusUI.shared.bannerHint = p.bannerHint
+        }
+        await MainActor.run {
+            // Screen lock: abort whatever is in flight and take every overlay off screen; the pre-action guard
+            // (`checkScreenLock`) refuses new work until the unlock. Unlock: cached trees may be stale.
+            LockScreenMonitor.shared.onLock = {
+                Daemon.shared.cancelNow(reason: .screenLocked, message: "the screen was locked")
+                CursorOverlay.shared.hideNow()
+                StatusUI.shared.hideBanner()
+                Task { await Daemon.shared.screenDidLock() }
+            }
+            LockScreenMonitor.shared.onUnlock = {
+                Log.info("screen unlocked; forgetting cached revisions")
+                Task { await Daemon.shared.resetAllRevisions() }
+            }
+            LockScreenMonitor.shared.start()
         }
         await MainActor.run {
             PermissionsMonitor.shared.onGranted = { p in
@@ -106,8 +125,37 @@ actor Daemon {
     private func noteIntervention(type: String) {
         interventionAt = Date()
         lastInterventionType = type
+        resetAllRevisions()
+        Task { @MainActor in CursorOverlay.shared.pauseNow() }
+    }
+
+    /// Forgets every cached revision (app sessions and Chrome tabs) so the next `state` returns a full tree instead
+    /// of a diff against something the user, or the lock screen, may have changed behind our back.
+    func resetAllRevisions() {
         for s in sessions.values { s.revisions.reset() }
-        Task { @MainActor in CursorOverlay.shared.hideNow() }
+        chrome.resetRevisions()
+    }
+
+    /// The screen locked while (or after) we were controlling an app: drop the active label and the power assertion.
+    func screenDidLock() {
+        setActive(nil)
+    }
+
+    /// Sets the lens activity (the menu bar follows through `onActivityChanged`). `anchor` is the target window
+    /// frame (CG coordinates) the lens attaches to while the cursor is hidden.
+    private func setActivity(_ a: WispActivity, anchor: CGRect?) async {
+        await MainActor.run { CursorOverlay.shared.setActivity(a, anchor: anchor) }
+    }
+
+    /// Same as `setActivity` for `defer` blocks, which cannot await; the main actor runs jobs in order, so an idle
+    /// posted here lands after the observing/acting transition that preceded it.
+    private func postActivity(_ a: WispActivity) {
+        Task { @MainActor in
+            // An intervention has already switched the lens to `.paused`; the cancelled call's idle must not cut
+            // that second short (the pause resolves to idle on its own).
+            if a == .idle, CursorOverlay.shared.activity == .paused { return }
+            CursorOverlay.shared.setActivity(a, anchor: nil)
+        }
     }
 
     // MARK: Dispatch
@@ -169,6 +217,7 @@ actor Daemon {
             var finalState: JSON = .null
             let opts = StateOptions.parse(params["state"].isNull ? params : params["state"])
             for (i, step) in steps.enumerated() {
+                try checkScreenLock()
                 let kind = step["kind"].string ?? step["cmd"].string ?? ""
                 if kind == "state" {
                     finalState = try await captureState(target, options: StateOptions.parse(step))
@@ -218,7 +267,9 @@ actor Daemon {
             setActive(nil)
             return ["result": ["ok": true]]
         case Proto.Method.sessionStatus:
+            let activity = await MainActor.run { CursorOverlay.shared.activity }
             return ["result": ["active": activeLabel.map { .string($0) } ?? .null, "busy": .bool(busy),
+                               "activity": .string(activity.rawValue), "screenLocked": .bool(LockScreenMonitor.shared.isLocked),
                                "sessions": .array(sessions.values.map { $0.info.json }),
                                "intervention": interventionAt.map { .string(ISO8601DateFormatter().string(from: $0)) } ?? .null,
                                "interventionType": lastInterventionType.map { .string($0) } ?? .null]]
@@ -233,7 +284,10 @@ actor Daemon {
             await MainActor.run {
                 CursorOverlay.shared.enabled = p.cursorEnabled
                 CursorOverlay.shared.setAccent(hex: p.cursorAccent)
+                CursorOverlay.shared.lensEnabled = p.lensEnabled
                 StatusUI.shared.bannerEnabled = p.bannerEnabled
+                StatusUI.shared.bannerText = p.bannerText
+                StatusUI.shared.bannerHint = p.bannerHint
             }
             return ["result": policy.json]
         case Proto.Method.chromeStatus:
@@ -376,7 +430,7 @@ actor Daemon {
     }
 
     private func checkScreenLock() throws {
-        if let d = CGSessionCopyCurrentDictionary() as? [String: Any], let locked = d["CGSSessionScreenIsLocked"] as? Bool, locked {
+        if LockScreenMonitor.shared.isLocked || LockScreenMonitor.currentlyLocked() {
             throw WispError(.screenLocked, "the screen is locked")
         }
     }
@@ -415,12 +469,15 @@ actor Daemon {
 
     private func captureAppState(_ s: AppSession, window w0: WindowInfo, options: StateOptions) async throws -> JSON {
         setActive(s.displayName)
+        await setActivity(.observing, anchor: w0.frame)
+        defer { postActivity(.idle) }
         var w = w0
         var settled = true
+        var busyIndicator = false
         if s.needsSettle {
-            Task { @MainActor in CursorOverlay.shared.setLoading(true) }
-            settled = await settle(s)
-            Task { @MainActor in CursorOverlay.shared.setLoading(false) }
+            let outcome = await settle(s)
+            settled = outcome == .settled
+            busyIndicator = outcome == .busyIndicator
             w = (try? selectWindow(s, spec: nil)) ?? w
         }
         let clip = w.frame.intersection(screenBounds)
@@ -449,23 +506,25 @@ actor Daemon {
             instructions = catalog.compose(candidates: instructionCandidates(for: s.info), isBrowser: s.info.isBrowser).text
             s.instructionsShown = true
         }
-        return try await finishState(root: root, header: header, revisions: s.revisions, options: options, settled: settled,
-                                     targetJSON: ["kind": "app", "app": s.info.json, "window": w.json],
-                                     instructions: instructions, screenshot: {
-                                         guard let id = w.id else { throw WispError(.windowNotFound, "window has no CGWindow id (not on screen?)") }
-                                         let shot = try await ScreenshotService.captureWindow(id: id, frame: w.frame)
-                                         s.lastScreenshot = shot
-                                         return shot
-                                     })
+        var result = try await finishState(root: root, header: header, revisions: s.revisions, options: options, settled: settled,
+                                           targetJSON: ["kind": "app", "app": s.info.json, "window": w.json],
+                                           instructions: instructions, screenshot: {
+                                               guard let id = w.id else { throw WispError(.windowNotFound, "window has no CGWindow id (not on screen?)") }
+                                               let shot = try await ScreenshotService.captureWindow(id: id, frame: w.frame)
+                                               s.lastScreenshot = shot
+                                               return shot
+                                           })
+        if busyIndicator { result["text"] = .string((result["text"].string ?? "") + "\n# not settled (busy indicator visible)") }
+        return result
     }
 
     private func captureTabState(_ t: ChromeTab, options: StateOptions) async throws -> JSON {
         setActive("Chrome tab")
+        await setActivity(.observing, anchor: await t.windowFrame())
+        defer { postActivity(.idle) }
         var settled = true
         if t.needsSettle {
-            Task { @MainActor in CursorOverlay.shared.setLoading(true) }
             await t.waitForQuiet(min: policy.settleMin, quiet: policy.settleQuiet, max: policy.settleMax)
-            Task { @MainActor in CursorOverlay.shared.setLoading(false) }
             settled = true
         }
         var snap = try await t.snapshot()
@@ -586,25 +645,56 @@ actor Daemon {
 
     // MARK: Settle
 
-    private func settle(_ s: AppSession) async -> Bool {
+    private enum SettleOutcome { case settled, timedOut, busyIndicator, cancelled, screenLocked }
+
+    /// Waits for the app to go quiet after an action: a minimum delay, then no AX notifications for `settleQuiet`
+    /// and no visible progress/busy indicator in the window, all bounded by `settleMax`.
+    private func settle(_ s: AppSession) async -> SettleOutcome {
         let start = s.lastActionAt ?? Date()
         let before = AXNotificationHub.shared.stats(pid: s.pid)?.count ?? 0
         await EventSynth.sleep(policy.settleMin)
-        var settled = false
+        var outcome = SettleOutcome.timedOut
+        var busyVisible = false
         while Date().timeIntervalSince(start) < policy.settleMax {
-            if cancelToken.isCancelled { break }
+            if cancelToken.isCancelled { outcome = .cancelled; break }
+            if LockScreenMonitor.shared.isLocked { outcome = .screenLocked; break }
             let stats = AXNotificationHub.shared.stats(pid: s.pid)
             let quietSince = max(stats?.lastEvent ?? .distantPast, start)
             if Date().timeIntervalSince(quietSince) >= policy.settleQuiet {
-                let busy = (s.lastWindow?.element.value("AXElementBusy") as? Bool) ?? false
-                if !busy { settled = true; break }
+                busyVisible = s.lastWindow.map { Daemon.busyIndicatorVisible(in: $0) } ?? false
+                if !busyVisible { outcome = .settled; break }
             }
-            await EventSynth.sleep(0.05)
+            await EventSynth.sleep(busyVisible ? 0.15 : 0.05)
         }
+        if outcome == .timedOut, busyVisible { outcome = .busyIndicator }
         let after = AXNotificationHub.shared.stats(pid: s.pid)?.count ?? 0
-        Log.debug("settle \(s.displayName): \(String(format: "%.2f", Date().timeIntervalSince(start)))s, \(after - before) AX notifications, settled=\(settled)")
+        Log.debug("settle \(s.displayName): \(String(format: "%.2f", Date().timeIntervalSince(start)))s, \(after - before) AX notifications, outcome=\(outcome)")
         s.needsSettle = false
-        return settled
+        return outcome
+    }
+
+    /// Cheap scan for something still in progress: `AXElementBusy` on the window, or a visible progress/busy
+    /// indicator among its descendants (depth <= 6, at most 300 elements). A determinate indicator that has reached
+    /// its maximum does not count.
+    private static func busyIndicatorVisible(in w: WindowInfo) -> Bool {
+        if (w.element.value("AXElementBusy") as? Bool) == true { return true }
+        let indicatorRoles: Set<String> = ["AXProgressIndicator", "AXBusyIndicator"]
+        var visited = 0
+        func scan(_ el: AXEl, depth: Int) -> Bool {
+            for c in el.children {
+                visited += 1
+                if visited > 300 { return false }
+                if let role = c.role, indicatorRoles.contains(role) {
+                    guard let f = c.frame, !f.isEmpty, f.intersects(w.frame) else { continue }
+                    if let v = (c.value(kAXValueAttribute) as? NSNumber)?.doubleValue,
+                       let m = (c.value(kAXMaxValueAttribute) as? NSNumber)?.doubleValue, m > 0, v >= m { continue }
+                    return true
+                }
+                if depth < 6, scan(c, depth: depth + 1) { return true }
+            }
+            return false
+        }
+        return scan(w.element, depth: 1)
     }
 
     // MARK: Actions
@@ -674,12 +764,16 @@ actor Daemon {
         defer { busy = false; EventTapMonitor.shared.armed = false }
         switch target {
         case .app(let s, let w):
+            await setActivity(.acting, anchor: w.frame)
+            defer { postActivity(.idle) }
             try await performApp(s, window: w, action: action, params: params)
             var out: [String: JSON] = ["ok": true, "action": .string(action.kind)]
             if observe { out["state"] = try await captureState(target, options: stateOptions) }
             Task { @MainActor in CursorOverlay.shared.hide(after: 1.2) }
             return .object(out)
         case .tab(let t):
+            await setActivity(.acting, anchor: await t.windowFrame())
+            defer { postActivity(.idle) }
             try await performTab(t, action: action, params: params)
             var out: [String: JSON] = ["ok": true, "action": .string(action.kind)]
             if observe { out["state"] = try await captureState(target, options: stateOptions) }

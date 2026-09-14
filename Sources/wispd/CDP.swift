@@ -244,6 +244,9 @@ final class ChromeBackend {
 
     func dropTab(_ id: String) { tabs.removeValue(forKey: id)?.close() }
 
+    /// Forgets every cached revision of the open tabs (the next `state` returns a full tree).
+    func resetRevisions() { for t in tabs.values { t.revisions.reset() } }
+
     static func launch(port requested: Int, profile: URL, url: String?, app: String = "Google Chrome") async throws -> Int {
         try? FileManager.default.createDirectory(at: profile, withIntermediateDirectories: true)
         // Reuse a Wisp Chrome that is already running on the recorded port.
@@ -454,12 +457,26 @@ final class ChromeTab {
 
     /// Screen coordinates (CG, top-left origin) for a viewport point, used to place the overlay cursor.
     func screenPoint(for p: CGPoint) async -> CGPoint? {
+        guard let m = await windowMetrics() else { return nil }
+        let chrome = max(0, m.outerHeight - m.innerHeight)
+        return CGPoint(x: m.x + p.x, y: m.y + chrome + p.y)
+    }
+
+    /// The browser window's frame in CG screen coordinates (used to anchor the activity lens), or nil when the page
+    /// cannot be asked (a crashed or navigating target).
+    func windowFrame() async -> CGRect? {
+        guard let m = await windowMetrics(), m.outerWidth > 0, m.outerHeight > 0 else { return nil }
+        return CGRect(x: m.x, y: m.y, width: m.outerWidth, height: m.outerHeight)
+    }
+
+    private struct WindowMetrics { var x, y, outerWidth, outerHeight, innerHeight: Double }
+
+    private func windowMetrics() async -> WindowMetrics? {
         let expr = "JSON.stringify({x:window.screenX,y:window.screenY,oh:window.outerHeight,ih:window.innerHeight,ow:window.outerWidth,iw:window.innerWidth})"
         guard let r = try? await conn.send("Runtime.evaluate", ["expression": .string(expr), "returnByValue": true]),
               let s = r["result"]["value"].string, let j = try? JSON.parse(s),
               let sx = j["x"].double, let sy = j["y"].double, let oh = j["oh"].double, let ih = j["ih"].double else { return nil }
-        let chrome = max(0, oh - ih)
-        return CGPoint(x: sx + p.x, y: sy + chrome + p.y)
+        return WindowMetrics(x: sx, y: sy, outerWidth: j["ow"].double ?? 0, outerHeight: oh, innerHeight: ih)
     }
 
     // MARK: Input

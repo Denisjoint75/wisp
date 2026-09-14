@@ -8,7 +8,7 @@ import QuartzCore
 /// - `observing`: capturing or settling (reading the UI tree, taking a screenshot, waiting for quiet).
 /// - `acting`: an action is being performed; the lens accompanies the cursor.
 /// - `paused`: the user intervened; the lens turns neutral, stops sweeping and fades after a second.
-enum WispActivity: Equatable {
+enum WispActivity: String, Equatable {
     case idle
     case observing
     case acting
@@ -56,7 +56,7 @@ final class LensOverlay {
         panel.ignoresMouseEvents = true
         panel.hidesOnDeactivate = false
         panel.isReleasedWhenClosed = false
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle, .transient]
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         panel.sharingType = .none          // never appears in our own screenshots
         panel.animationBehavior = .none
         view = NSView(frame: NSRect(x: 0, y: 0, width: size, height: size))
@@ -186,10 +186,12 @@ final class LensOverlay {
         let p = CursorOverlay.appKitPoint(fromCG: center)
         let origin = NSPoint(x: p.x - half, y: p.y - half)
         if animated, isVisible {
+            // `setFrameOrigin` is not animatable through the animator proxy; the whole frame is.
+            let frame = NSRect(origin: origin, size: panel.frame.size)
             NSAnimationContext.runAnimationGroup { ctx in
                 ctx.duration = 0.2
                 ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-                panel.animator().setFrameOrigin(origin)
+                panel.animator().setFrame(frame, display: true)
             }
         } else {
             panel.setFrameOrigin(origin)

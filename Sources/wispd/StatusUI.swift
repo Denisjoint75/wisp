@@ -11,10 +11,14 @@ final class StatusUI: NSObject {
     private let banner: NSPanel
     private let label = NSTextField(labelWithString: "")
     private var activeApp: String?
+    private var activity: WispActivity = .idle
     var onStop: (() -> Void)?
     var onQuit: (() -> Void)?
     var onCheckForUpdates: (() -> Void)?
     var bannerEnabled = true
+    /// Banner template (`{app}` is substituted) and the suffix shown while observing; both come from the policy.
+    var bannerText = BannerTemplate.defaultText
+    var bannerHint = BannerTemplate.defaultHint
     private var missing: [PermissionsMonitor.Permission] = []
     private var permissionItems: [NSMenuItem] = []
 
@@ -64,7 +68,8 @@ final class StatusUI: NSObject {
     }
 
     private func showBanner(for app: String) {
-        let text = "✦ Wisp is controlling \(app)  ·  Esc to stop"
+        let text = BannerTemplate.render(bannerText, app: app, hint: activity == .observing ? bannerHint : nil)
+        Log.debug("banner: \(text)")
         label.stringValue = text
         let width = max(260, min(720, label.attributedStringValue.size().width + 44))
         let screen = NSScreen.main ?? NSScreen.screens.first
@@ -177,9 +182,35 @@ final class StatusUI: NSObject {
 
     private var menuIdleTimer: Timer?
 
+    /// Hides the banner at once (screen lock); the menu bar item is left to `setActive`.
+    func hideBanner() {
+        hideTimer?.invalidate()
+        banner.orderOut(nil)
+    }
+
+    /// Menu item title for the current app and activity: "reading X" while observing, "acting in X" while acting.
+    private func statusTitle() -> String {
+        guard let app = activeApp else { return "Wisp: idle" }
+        switch activity {
+        case .observing: return "Wisp: reading \(app)"
+        case .acting: return "Wisp: acting in \(app)"
+        case .paused: return "Wisp: paused in \(app)"
+        case .idle: return "Wisp: controlling \(app)"
+        }
+    }
+
+    /// Mirrors the lens activity in the menu bar title and the banner hint. The banner is only re-rendered while it
+    /// is already on screen, so an idle transition never brings it back.
+    func setActivity(_ a: WispActivity) {
+        guard a != activity else { return }
+        activity = a
+        if let m = item?.menu?.item(withTag: 1) { m.title = statusTitle() }
+        if let app = activeApp, bannerEnabled, banner.isVisible { showBanner(for: app) }
+    }
+
     func setActive(app: String?) {
         activeApp = app
-        if let m = item?.menu?.item(withTag: 1) { m.title = app.map { "Wisp: controlling \($0)" } ?? "Wisp: idle" }
+        if let m = item?.menu?.item(withTag: 1) { m.title = statusTitle() }
         updateStatusButton()
         menuIdleTimer?.invalidate()
         if app != nil {

@@ -242,6 +242,18 @@ enum Commands {
                         guard Policy.instructionsModes.contains(m.lowercased()) else { throw WispError(.invalidParams, "--instructions-mode must be merge, replace or off") }
                         p["instructionsMode"] = .string(m.lowercased())
                     }
+                    if let t = a.value("banner-text") {
+                        guard !t.trimmingCharacters(in: .whitespaces).isEmpty else { throw WispError(.invalidParams, "--banner-text must not be empty (use {app} for the app name)") }
+                        p["bannerText"] = .string(t)
+                    }
+                    if let h = a.value("banner-hint") { p["bannerHint"] = .string(h) }
+                    if let l = a.value("lens") {
+                        switch l.lowercased() {
+                        case "on", "true", "1", "yes": p["lensEnabled"] = true
+                        case "off", "false", "0", "no": p["lensEnabled"] = false
+                        default: throw WispError(.invalidParams, "--lens must be on or off")
+                        }
+                    }
                     result = try client.call(Proto.Method.policySet, p)
                 } else { throw WispError(.invalidParams, "policy get|set") }
             case "instructions":
@@ -425,7 +437,8 @@ enum Commands {
 
     Session & daemon
       wisp cancel | end [--app X] | status | log
-      wisp policy get | set [--allow ID ...] [--deny ID ...] [--instructions-mode merge|replace|off] ...
+      wisp policy get | set [--allow ID ...] [--deny ID ...] [--instructions-mode merge|replace|off]
+                            [--banner-text "✦ Wisp is controlling {app}"] [--banner-hint reading] [--lens on|off] ...
       wisp doctor [--request-permissions]        wisp daemon start|stop|restart|status|log
       wisp mcp                                   MCP stdio server exposing the same tools
       wisp --json ... for machine-readable output

@@ -5,39 +5,29 @@ import Foundation
 /// Watches the login session for lock/unlock transitions so an in-flight action can be cancelled the moment the
 /// screen locks, and cached UI state can be invalidated once the user is back.
 ///
-/// Mirrors Codex's `SystemLockScreenMonitor`: it reads `CGSessionCopyCurrentDictionary()["CGSSessionScreenIsLocked"]`
-/// for the initial value, then follows the distributed notifications `com.apple.screenIsLocked` /
+/// It reads `CGSessionCopyCurrentDictionary()["CGSSessionScreenIsLocked"]` for the initial value, then follows the
+/// distributed notifications `com.apple.screenIsLocked` /
 /// `com.apple.screenIsUnlocked` (screen saver lock, Cmd-Ctrl-Q, lid close with a password) and NSWorkspace's
 /// `sessionDidResignActive` / `sessionDidBecomeActive` (fast user switching, where our session leaves the console
 /// entirely). Both sources collapse into one boolean; callbacks only fire on a real transition, so a lock that is
 /// reported by both channels still produces a single `onLock`.
 ///
-/// Integration (wired by the daemon, not by this file):
-///
-///     // in Daemon.start(), after StatusUI / CursorOverlay are configured:
-///     LockScreenMonitor.shared.onLock = {
-///         Daemon.shared.cancelNow(reason: .screenLocked, message: "the screen was locked")
-///         CursorOverlay.shared.hideNow()          // callbacks already run on the main thread
-///         StatusUI.shared.setActive(app: nil)     // drops the "Wisp is controlling …" banner
-///     }
-///     LockScreenMonitor.shared.onUnlock = {
-///         // Windows may have moved, closed or re-rendered behind the lock screen: forget every cached revision so
-///         // the next `state` call returns a full tree instead of a diff against a stale one.
-///         Task { await Daemon.shared.resetAllRevisions() }   // for s in sessions.values { s.revisions.reset() }
-///     }
-///     LockScreenMonitor.shared.start()
+/// Integration (wired in `Daemon.start()`): `onLock` cancels the in-flight action with `screenLocked` and hides the
+/// cursor, lens and banner; `onUnlock` forgets every cached revision (`Daemon.resetAllRevisions()`) because windows
+/// may have moved, closed or re-rendered behind the lock screen, so the next `state` returns a full tree instead of
+/// a diff against a stale one.
 ///
 /// `checkScreenLock()` in `Daemon.swift` remains the synchronous pre-action guard (it throws `screenLocked` before
 /// any event is posted); this monitor covers the window *during* an action, where the guard has already passed.
 /// Actions may also consult `LockScreenMonitor.shared.isLocked` from any thread instead of re-reading the CG
-/// session dictionary.
+/// session dictionary. `start()`, `stop()` and the callback properties are meant to be used from the main thread.
 final class LockScreenMonitor {
     static let shared = LockScreenMonitor()
 
-    /// Called on the main thread when the session transitions from unlocked to locked.
-    var onLock: (() -> Void)?
-    /// Called on the main thread when the session transitions from locked to unlocked.
-    var onUnlock: (() -> Void)?
+    /// Called on the main actor when the session transitions from unlocked to locked.
+    var onLock: (@MainActor () -> Void)?
+    /// Called on the main actor when the session transitions from locked to unlocked.
+    var onUnlock: (@MainActor () -> Void)?
 
     private let lock = NSLock()
     private var locked = false
@@ -67,12 +57,14 @@ final class LockScreenMonitor {
     /// Begins observing. Idempotent: a second call is a no-op. Seeds `isLocked` from the CG session so a daemon
     /// that starts while the screen is already locked reports the right value before any notification arrives.
     func start() {
+        // The lock also guards the observer token arrays; the observer blocks run later on the main queue and take
+        // the lock themselves in `transition`, so registering under it cannot deadlock.
         lock.lock()
-        if started { lock.unlock(); return }
+        defer { lock.unlock() }
+        if started { return }
         started = true
         locked = Self.currentlyLocked()
         let initial = locked
-        lock.unlock()
 
         let dnc = DistributedNotificationCenter.default()
         distributedTokens = [
@@ -101,9 +93,9 @@ final class LockScreenMonitor {
     /// Stops observing. `isLocked` keeps its last value; `start()` may be called again later.
     func stop() {
         lock.lock()
-        guard started else { lock.unlock(); return }
+        defer { lock.unlock() }
+        guard started else { return }
         started = false
-        lock.unlock()
         let dnc = DistributedNotificationCenter.default()
         for t in distributedTokens { dnc.removeObserver(t) }
         distributedTokens.removeAll()
@@ -114,7 +106,7 @@ final class LockScreenMonitor {
     }
 
     /// Applies a new state and fires the matching callback only when the state actually changed. Always runs on the
-    /// main thread (observers are registered on `.main`), so callbacks may touch AppKit directly.
+    /// main thread (observers are registered on `.main`), so the callbacks are invoked as main-actor code.
     private func transition(to newValue: Bool, source: String) {
         lock.lock()
         let changed = locked != newValue
@@ -122,6 +114,8 @@ final class LockScreenMonitor {
         lock.unlock()
         guard changed else { return }
         Log.info("screen \(newValue ? "locked" : "unlocked") (\(source))")
-        if newValue { onLock?() } else { onUnlock?() }
+        MainActor.assumeIsolated {
+            if newValue { onLock?() } else { onUnlock?() }
+        }
     }
 }

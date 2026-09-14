@@ -56,6 +56,9 @@ final class CursorOverlay {
     private let lensAnchorInset: CGFloat = 14
     /// Current activity as last set through `setActivity(_:anchor:)` or `setLoading(_:)`.
     private(set) var activity: WispActivity = .idle
+    /// Invoked on the main actor whenever `activity` changes, including the internal transitions back to idle
+    /// (pause elapsed, `hideNow`), so the menu bar can mirror the lens.
+    var onActivityChanged: ((WispActivity) -> Void)?
     /// Master switch for the lens; `false` hides it and keeps it hidden regardless of activity.
     var lensEnabled = true {
         didSet { if lensEnabled != oldValue { applyActivity(animated: false) } }
@@ -89,7 +92,7 @@ final class CursorOverlay {
         panel.ignoresMouseEvents = true
         panel.hidesOnDeactivate = false
         panel.isReleasedWhenClosed = false
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle, .transient]
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         panel.sharingType = .none
         panel.animationBehavior = .none
         view = FlippedView(frame: NSRect(x: 0, y: 0, width: panelSize, height: panelSize))
@@ -220,13 +223,29 @@ final class CursorOverlay {
         updateLensPlacement(animated: true)
     }
 
-    /// Hides the cursor immediately and returns the activity to idle (used on intervention and shutdown).
+    /// Hides the cursor and the lens immediately (no fades) and returns the activity to idle (screen lock, shutdown).
     func hideNow() {
+        hideTask?.cancel()
+        pauseHideTask?.cancel()
+        pauseHideTask = nil
+        panel.alphaValue = 0
+        panel.orderOut(nil)
+        visible = false
+        changeActivity(.idle, note: "hideNow")
+        lensAnchor = nil
+        lensFollowsCursor = false
+        lens.setPaused(false)
+        lens.hide(immediately: true)
+    }
+
+    /// User intervention: the cursor disappears at once while a visible lens turns neutral and fades after a second
+    /// (`.paused`); a hidden lens leaves the activity idle.
+    func pauseNow() {
         hideTask?.cancel()
         panel.alphaValue = 0
         panel.orderOut(nil)
         visible = false
-        setActivity(.idle, anchor: nil)
+        setActivity(.paused, anchor: lensAnchor)
     }
 
     /// Animates to `target` (CG coords). Returns once the spring is 99.5% done or within ~3pt (Sky's "closeEnough").
@@ -420,17 +439,25 @@ final class CursorOverlay {
     /// - `.observing` and `.acting` show the lens (120 ms fade-in); `.idle` hides it (200 ms fade-out); `.paused`
     ///   turns the arc neutral gray, freezes the sweep and hides the lens after 1 s.
     func setActivity(_ a: WispActivity, anchor: CGRect?) {
-        activity = a
+        changeActivity(a, note: anchor.map { "anchor=\(Int($0.origin.x)),\(Int($0.origin.y)) \(Int($0.width))x\(Int($0.height))" })
         lensAnchor = anchor
         applyActivity(animated: true)
     }
 
-    /// Legacy loading toggle kept for existing call sites: `true` maps to `.observing` when idle and `false`
-    /// returns `.observing` to `.idle`. An explicit `.acting` or `.paused` state set through `setActivity` is left
-    /// untouched so a settle inside an action does not flip the indicator.
+    /// Records a transition (no-op when unchanged), logs it and notifies `onActivityChanged`.
+    private func changeActivity(_ a: WispActivity, note: String? = nil) {
+        guard a != activity else { return }
+        Log.debug("activity \(activity.rawValue) -> \(a.rawValue)\(note.map { " (\($0))" } ?? "")")
+        activity = a
+        onActivityChanged?(a)
+    }
+
+    /// Legacy loading toggle kept for existing call sites: `true` maps to `.observing` when idle or paused (a new
+    /// read resumes a paused lens) and `false` returns `.observing` to `.idle`. An explicit `.acting` state set
+    /// through `setActivity` is left untouched so a settle inside an action does not flip the indicator.
     func setLoading(_ on: Bool) {
         switch (on, activity) {
-        case (true, .idle): setActivity(.observing, anchor: lensAnchor)
+        case (true, .idle), (true, .paused): setActivity(.observing, anchor: lensAnchor)
         case (false, .observing): setActivity(.idle, anchor: lensAnchor)
         default: break
         }
@@ -450,9 +477,10 @@ final class CursorOverlay {
         return nil
     }
 
-    /// Re-places (or hides) the lens after the cursor or anchor changed, without touching the activity state.
+    /// Re-places (or hides) the lens after the cursor or anchor changed, without touching the activity state. A
+    /// paused lens stays where it is until it fades.
     private func updateLensPlacement(animated: Bool) {
-        guard lensEnabled, activity != .idle else { return }
+        guard lensEnabled, activity == .observing || activity == .acting else { return }
         guard let (c, follows) = lensCenter() else {
             lensFollowsCursor = false
             lens.hide()
@@ -487,14 +515,23 @@ final class CursorOverlay {
             lens.place(centerCG: c, animated: animated && lens.isVisible)
             if !lens.isVisible { lens.show() }
         case .paused:
-            // Only a visible lens is "kept" for a second; a hidden one stays hidden.
-            guard lens.isVisible else { return }
+            // Only a visible lens is "kept" for a second; a hidden one stays hidden and the state is already idle.
+            // `.paused` is never sticky: it always resolves to `.idle` (or to `.observing` via a new read).
+            guard lens.isVisible else {
+                lensAnchor = nil
+                lensFollowsCursor = false
+                changeActivity(.idle, note: "lens hidden")
+                return
+            }
             lens.setPaused(true)
             pauseHideTask = Task { @MainActor [weak self] in
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
                 guard let self = self, !Task.isCancelled, self.activity == .paused else { return }
                 self.lensFollowsCursor = false
                 self.lens.hide()
+                self.lensAnchor = nil
+                self.pauseHideTask = nil
+                self.changeActivity(.idle, note: "pause elapsed")
             }
         }
     }
