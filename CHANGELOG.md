@@ -3,6 +3,20 @@
 All notable changes to Wisp are documented here. The section for each released version is shown in the Sparkle
 update dialog and in the GitHub release. This project follows [Semantic Versioning](https://semver.org).
 
+## [0.1.4] - 2026-09-15
+
+### Fixed
+- Chrome extension: a command no longer fails, or silently falls back to the separate Wisp Chrome ("Chrome DevTools
+  is not reachable on port 9222"), when the extension's service worker restarts in the middle of it. The bridge
+  now waits up to 10 s for the extension to reconnect and sends the request again; and while the extension is
+  connected (or was within the last minute) a failed tab listing is reported as an extension error instead of
+  being papered over with the Wisp Chrome's. Marks (`deliverable`/`handoff`) of the user's tabs are kept across
+  such a restart instead of being forgotten because a listing came back empty.
+- Chrome extension: fewer round trips per command. A tab addressed by its exact id skips the tab listing, and the
+  seven DevTools domain enables of a tab's first `state` go out concurrently instead of one after the other
+  (each round trip through the service worker was 0.3 to 0.8 s on a busy Mac).
+- `wisp end --tab T` no longer closes a tab marked `deliverable` or `handoff`; it only detaches from it.
+
 ## [0.1.3] - 2026-09-15
 
 ### Fixed

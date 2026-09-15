@@ -1,6 +1,6 @@
 {
   "name": "wisp",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Computer use for macOS: read an app window as an indexed accessibility tree and drive native apps and Chrome tabs with the `wisp` CLI.",
   "author": {
     "name": "Vincent Yang",

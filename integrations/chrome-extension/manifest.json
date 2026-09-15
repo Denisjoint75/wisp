@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Wisp",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Lets Wisp, the macOS computer-use daemon, read and operate the tabs of this browser.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEApc6QMyBN25Vpp+mM5SxbPNROlJovjA8fQsQEiGWr4k2/al39D+4KIayVU23kgHls5YIOJyiIeV5+ruyCxn8qFrZB4EzDRAbSAeOvlubaRYGF8RagCT34XzS5nPlcuj2B/qydWCoHCxYvJdvNP1+WKIVxwA9t0aBtxDf3SoyoSPj1HSQ/VyCqXo7+sitJ4GAX9Nga6nSkaQpAON7SlgMv8QShcbh9IcSI0UyAEf45CEZJeDx5Ca7tlo2RE4g9NWpyL1bxAmgBD8IbCAoQlV8a3iiYqG9sQJlLafnJ/qSJWN+yfA8ZhXcUQagGJqyWNURuNnrb548KvPsTV89NEjnLTwIDAQAB",
   "minimum_chrome_version": "116",
