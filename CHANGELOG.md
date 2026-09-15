@@ -3,6 +3,15 @@
 All notable changes to Wisp are documented here. The section for each released version is shown in the Sparkle
 update dialog and in the GitHub release. This project follows [Semantic Versioning](https://semver.org).
 
+## [0.1.5] - 2026-09-15
+
+### Changed
+- A `state` over the line budget (400 lines by default) no longer hides everything below the cut. After the
+  omission note it lists the landmarks down there (a pagination `nav`, a `dialog`, a `form`, the `footer`) with up
+  to six of their enabled controls each, the first ones and the last two, with their real indices. On an Amazon
+  results page the "Go to next page" button is now one `click --el` away instead of needing `--query` or a
+  scripted scroll; the skill explains the section.
+
 ## [0.1.4] - 2026-09-15
 
 ### Fixed
