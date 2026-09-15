@@ -855,14 +855,14 @@ Deliberately deferred, with the evidence that informed the decision:
   driving feature and carries privacy weight; it is a separate, opt-in milestone.
 - **Loopback audio recording** (`SKY_ENABLE_AUDIO`) and **record-and-replay** prompt templates: niche, later.
 
-### 2.13 The user's own browser: the Wisp Chrome extension (implemented in 0.2.0)
+### 2.13 The user's own browser: the Wisp Chrome extension (implemented in 0.1.2)
 
 Why an extension at all: synthesized mouse events posted to Chrome's process (`CGEvent.postToPid`) are dispatched
 by the browser process but never reach the web renderer, which only trusts events that arrived through the HID
 path; every "click" into page content silently did nothing (§1.5, §2.8). Codex therefore drives Chrome through the
 DevTools Protocol, and reaches the user's *own* Chrome with its extension (`hehggadaopoacecdllhhajmbjkdcmajg`,
 `chrome.debugger` + `chrome.runtime.connectNative("com.openai.codexextension")`, host binary "ChatGPT for Chrome"
-under `~/.codex/plugins/cache/openai-bundled/chrome/`). Wisp 0.1 had only the separate DevTools instance; 0.2 adds
+under `~/.codex/plugins/cache/openai-bundled/chrome/`). Wisp 0.1.1 had only the separate DevTools instance; 0.1.2 adds
 the same extension mechanism.
 
 Pieces (`integrations/chrome-extension`, `Sources/wispd/ExtensionBridge.swift`, `Sources/wisp/NativeHost.swift`,

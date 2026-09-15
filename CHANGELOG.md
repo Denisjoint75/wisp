@@ -3,7 +3,7 @@
 All notable changes to Wisp are documented here. The section for each released version is shown in the Sparkle
 update dialog and in the GitHub release. This project follows [Semantic Versioning](https://semver.org).
 
-## [0.2.0] - 2026-09-15
+## [0.1.2] - 2026-09-15
 
 ### Added
 - Chrome extension: Wisp can now work in your own Chrome (or Brave, Edge, Chromium, Arc, Vivaldi), the way the
