@@ -423,7 +423,16 @@ actor Daemon {
 
     private func session(for spec: String, launch: Bool, activate: Bool) async throws -> AppSession {
         if let app = try AppResolver.findRunning(spec) {
-            return try await makeSession(app)
+            let s = try await makeSession(app)
+            // A running app with no window (a document app whose last document was closed) would fail every action.
+            // Since Wisp no longer activates apps, nothing would make it open an untitled window: send it a reopen
+            // through Launch Services (no activation) and give it a moment to show one.
+            if launch, !AppResolver.windows(of: app).contains(where: { $0.id != nil }), let url = app.bundleURL {
+                _ = try? await AppResolver.launch(url: url, activate: activate)
+                let deadline = Date().addingTimeInterval(5)
+                while !AppResolver.windows(of: app).contains(where: { $0.id != nil }), Date() < deadline { await EventSynth.sleep(0.1) }
+            }
+            return s
         }
         guard launch else { throw WispError(.appNotFound, "app `\(spec)` is not running") }
         guard let url = try AppResolver.findInstalled(spec) else {
@@ -1200,7 +1209,9 @@ actor Daemon {
             await cursor.move(to: sp)
         }
 
-        EventTapMonitor.shared.armed = true
+        // Tab input goes through DevTools inside Chrome and never competes with the user's mouse or keyboard, so
+        // browser work keeps running while the user works (Esc still cancels; it is handled before the armed check).
+        EventTapMonitor.shared.armed = false
         switch action {
         case .click(let el, let at, let button, let count):
             let (p, _) = try await pointFor(el: el, at: at)

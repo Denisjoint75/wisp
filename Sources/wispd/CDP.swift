@@ -371,6 +371,15 @@ final class ChromeBackend {
             if (try? await backend.version()) != nil {
                 // Everything Chrome opened at startup (the URL or about:blank) is the agent's.
                 let tabs = ((try? await backend.listTabs()) ?? []).map { $0.id }
+                if !visible {
+                    // Chrome activates and shows itself while it creates its first window, regardless of `open -g -j`.
+                    // Keep it hidden through that phase so the user's frontmost app never changes.
+                    let until = Date().addingTimeInterval(2.5)
+                    while Date() < until {
+                        if let app = backend.runningApp(), !app.isHidden { app.hide() }
+                        try? await Task.sleep(nanoseconds: 150_000_000)
+                    }
+                }
                 return (port, tabs)
             }
             try? await Task.sleep(nanoseconds: 250_000_000)
@@ -410,6 +419,7 @@ final class ChromeTab {
                 self.eventLock.lock()
                 self.pendingChooser = (params["backendNodeId"].int, params["mode"].string ?? "selectSingle")
                 self.eventLock.unlock()
+                Log.debug("tab \(self.id.prefix(8)): file chooser opened (node \(params["backendNodeId"].int.map(String.init) ?? "?"), \(params["mode"].string ?? "?"))")
             case "Page.javascriptDialogOpening":
                 self.eventLock.lock()
                 self.pendingDialog = (params["type"].string ?? "dialog", params["message"].string ?? "", params["defaultPrompt"].string)
@@ -455,7 +465,17 @@ final class ChromeTab {
 
     /// Fills a file input: the given node, else the input whose chooser the last click opened.
     func setFiles(backendNodeId: Int?, files: [String]) async throws {
-        guard let node = backendNodeId ?? chooserNode else {
+        var target = backendNodeId ?? chooserNode
+        // The chooser event can arrive a moment after the click that opened it was acknowledged: give it a short
+        // grace period before giving up.
+        if target == nil {
+            let deadline = Date().addingTimeInterval(1.5)
+            while target == nil, Date() < deadline {
+                try? await Task.sleep(nanoseconds: 50_000_000)
+                target = chooserNode
+            }
+        }
+        guard let node = target else {
             throw WispError(.invalidParams, "no file input targeted; click the file input first or pass --el")
         }
         _ = try await conn.send("DOM.setFileInputFiles", ["files": .array(files.map { .string($0) }), "backendNodeId": .int(node)])

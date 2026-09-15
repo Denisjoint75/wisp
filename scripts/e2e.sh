@@ -35,7 +35,8 @@ chrome_section() {
   [[ -n "$TAB" ]] || { echo "no fixture tab"; return 1; }
   $W chrome tabs | grep -F "$TAB" | grep -q "\[agent\]" || { echo "tab is not tagged [agent]"; return 1; }
   TMPF=$(mktemp "${TMPDIR:-/tmp}/wisp-e2e-upload.XXXXXX"); echo "hello" >"$TMPF"
-  el() { $W state --tab "$TAB" --full --query "$1" | sed -n 's/^ *\[\([0-9]*\)\] .*/\1/p' | head -1; }
+  # Index of the first *control* line (role btn) matching the query; labels share the control's name.
+  el() { $W state --tab "$TAB" --full --query "$1" | grep ' btn ' | sed -n 's/^ *\[\([0-9]*\)\] .*/\1/p' | head -1; }
   echo "--- chrome: upload (click the file input, then fill the intercepted chooser)"
   FILE_EL=$(el "Attachment (file input)"); [[ -n "$FILE_EL" ]] || { echo "file input not found"; return 1; }
   $W click --tab "$TAB" --el "$FILE_EL" --no-observe
