@@ -26,6 +26,15 @@ final class MCPServer {
         "maxLines": ["type": "integer"],
         "instructions": ["type": "boolean", "description": "App-specific guidance: omit to get it once per session (first read), true to include it again, false to suppress it."],
     ]
+    /// Options every action tool accepts (mirrors the CLI action flags); the state options apply to the state
+    /// returned after the action.
+    private static let actionProps: [String: JSON] = stateProps.merging([
+        "observe": ["type": "boolean", "description": "Return the new state after the action (default true)."],
+        "space": ["type": "string", "enum": ["window", "screenshot", "screen"], "description": "Coordinate space for `at`/`from`/`to`: pixels of the last screenshot (default when one exists), window points, or screen points."],
+        "cursor": ["type": "boolean", "description": "Show the animated agent cursor (default true)."],
+        "activate": ["type": "boolean", "description": "Bring the app to the front for this action (default false: Wisp operates in place)."],
+        "hid": ["type": "boolean", "description": "Deliver through the HID system instead of the app's process (moves the real pointer; only for apps that ignore in-place input)."],
+    ]) { a, _ in a }
 
     private func schema(_ props: [String: JSON], required: [String] = []) -> JSON {
         var p = MCPServer.targetProps
@@ -36,37 +45,56 @@ final class MCPServer {
     private lazy var tools: [Tool] = [
         Tool(name: "wisp_apps", description: "List running apps and recently used apps (id, name, bundleId, running).",
              schema: ["type": "object", "properties": ["running": ["type": "boolean"]]]),
+        Tool(name: "wisp_windows", description: "List the windows of an app (id, focused, title, frame). Use the id or a title substring as `window` in other tools; sheets and secondary windows show up here.",
+             schema: schema([:], required: ["app"])),
         Tool(name: "wisp_state", description: "Read the accessibility tree of an app window or Chrome tab as indexed text (`[12] btn \"Save\"`). Returns a diff vs the previous call by default. The first read of an app includes app-specific guidance inside <app_specific_instructions>; follow it. Call after every action before deciding what to do next; never reuse indices from an old state.",
              schema: schema(MCPServer.stateProps)),
         Tool(name: "wisp_screenshot", description: "Capture a screenshot of the target window/tab (or a display). Coordinates you pass later in `at` are in this image's pixel space.",
              schema: schema(["display": ["type": "integer"]])),
         Tool(name: "wisp_click", description: "Click an element by index (preferred) or a coordinate. Returns the new state diff.",
              schema: schema(["el": ["type": "integer"], "at": ["type": "array", "items": ["type": "number"], "description": "[x,y] in the last screenshot's pixels (or window points if no screenshot)."],
-                             "button": ["type": "string", "enum": ["left", "right", "middle"]], "count": ["type": "integer", "description": "1 single, 2 double, 3 triple"],
-                             "observe": ["type": "boolean"]].merging(MCPServer.stateProps) { a, _ in a })),
-        Tool(name: "wisp_type", description: "Type text at the current keyboard focus (use wisp_set for fields; newlines press Return).",
-             schema: schema(["text": ["type": "string"], "observe": ["type": "boolean"]], required: ["text"])),
+                             "button": ["type": "string", "enum": ["left", "right", "middle"]], "count": ["type": "integer", "description": "1 single, 2 double, 3 triple"]].merging(MCPServer.actionProps) { a, _ in a })),
+        Tool(name: "wisp_move", description: "Move the agent pointer to an element or coordinate without clicking (hover).",
+             schema: schema(["el": ["type": "integer"], "at": ["type": "array", "items": ["type": "number"]]].merging(MCPServer.actionProps) { a, _ in a })),
+        Tool(name: "wisp_mouse_down", description: "Press and hold the left mouse button at an element or coordinate (pair with wisp_mouse_up for custom drags).",
+             schema: schema(["el": ["type": "integer"], "at": ["type": "array", "items": ["type": "number"]]].merging(MCPServer.actionProps) { a, _ in a })),
+        Tool(name: "wisp_mouse_up", description: "Release the mouse button at an element or coordinate (or where the pointer is when neither is given).",
+             schema: schema(["el": ["type": "integer"], "at": ["type": "array", "items": ["type": "number"]]].merging(MCPServer.actionProps) { a, _ in a })),
+        Tool(name: "wisp_type", description: "Type text at the current keyboard focus (use wisp_set for fields). Newline characters press Return, which sends in chat composers: use wisp_set or wisp_paste there.",
+             schema: schema(["text": ["type": "string"]].merging(MCPServer.actionProps) { a, _ in a }, required: ["text"])),
         Tool(name: "wisp_key", description: "Press a key chord in xdotool syntax: 'Return', 'cmd+l', 'ctrl+shift+t', 'cmd+l,Return' (comma = sequence).",
-             schema: schema(["key": ["type": "string"], "observe": ["type": "boolean"]], required: ["key"])),
+             schema: schema(["key": ["type": "string"]].merging(MCPServer.actionProps) { a, _ in a }, required: ["key"])),
         Tool(name: "wisp_set", description: "Replace the value of an editable element (text field, combo, slider) by index.",
-             schema: schema(["el": ["type": "integer"], "value": ["type": "string"], "observe": ["type": "boolean"]], required: ["el", "value"])),
+             schema: schema(["el": ["type": "integer"], "value": ["type": "string"]].merging(MCPServer.actionProps) { a, _ in a }, required: ["el", "value"])),
         Tool(name: "wisp_scroll", description: "Scroll at an element or point by pages in a direction.",
-             schema: schema(["el": ["type": "integer"], "at": ["type": "array", "items": ["type": "number"]], "direction": ["type": "string", "enum": ["up", "down", "left", "right"]], "pages": ["type": "number"], "observe": ["type": "boolean"]], required: ["direction"])),
+             schema: schema(["el": ["type": "integer"], "at": ["type": "array", "items": ["type": "number"]], "direction": ["type": "string", "enum": ["up", "down", "left", "right"]], "pages": ["type": "number"]].merging(MCPServer.actionProps) { a, _ in a }, required: ["direction"])),
         Tool(name: "wisp_drag", description: "Drag from one point to another (coordinates like `at`).",
-             schema: schema(["from": ["type": "array", "items": ["type": "number"]], "to": ["type": "array", "items": ["type": "number"]], "observe": ["type": "boolean"]], required: ["from", "to"])),
+             schema: schema(["from": ["type": "array", "items": ["type": "number"]], "to": ["type": "array", "items": ["type": "number"]]].merging(MCPServer.actionProps) { a, _ in a }, required: ["from", "to"])),
         Tool(name: "wisp_action", description: "Invoke a secondary accessibility action listed in braces in the state text, e.g. ShowMenu, Expand, Increment.",
-             schema: schema(["el": ["type": "integer"], "action": ["type": "string"], "observe": ["type": "boolean"]], required: ["el", "action"])),
+             schema: schema(["el": ["type": "integer"], "action": ["type": "string"]].merging(MCPServer.actionProps) { a, _ in a }, required: ["el", "action"])),
         Tool(name: "wisp_select_text", description: "Select text (or place the cursor before/after it) inside an editable element.",
-             schema: schema(["el": ["type": "integer"], "text": ["type": "string"], "prefix": ["type": "string"], "suffix": ["type": "string"], "selection": ["type": "string", "enum": ["text", "cursor_before", "cursor_after"]], "observe": ["type": "boolean"]], required: ["el", "text"])),
+             schema: schema(["el": ["type": "integer"], "text": ["type": "string"], "prefix": ["type": "string"], "suffix": ["type": "string"], "selection": ["type": "string", "enum": ["text", "cursor_before", "cursor_after"]]].merging(MCPServer.actionProps) { a, _ in a }, required: ["el", "text"])),
         Tool(name: "wisp_paste", description: "Paste text/markdown/html via the clipboard (clipboard is restored afterwards). Prefer for multi-line or formatted text.",
-             schema: schema(["text": ["type": "string"], "format": ["type": "string", "enum": ["text", "md", "html"]], "observe": ["type": "boolean"]], required: ["text"])),
+             schema: schema(["text": ["type": "string"], "format": ["type": "string", "enum": ["text", "md", "html"]]].merging(MCPServer.actionProps) { a, _ in a }, required: ["text"])),
         Tool(name: "wisp_batch", description: "Run several actions in one round trip: steps are objects like {\"kind\":\"click\",\"el\":4}, {\"kind\":\"type\",\"text\":\"hi\"}, {\"kind\":\"key\",\"key\":\"Return\"}, {\"kind\":\"state\"}, {\"kind\":\"sleep\",\"seconds\":0.5}. Stops at the first failure; returns the final state.",
-             schema: schema(["steps": ["type": "array", "items": ["type": "object"]], "observe": ["type": "boolean"]], required: ["steps"])),
+             schema: schema(["steps": ["type": "array", "items": ["type": "object"]]].merging(MCPServer.actionProps) { a, _ in a }, required: ["steps"])),
         Tool(name: "wisp_launch", description: "Launch an app by name/bundle id in the background (it is not brought to the front unless activate=true) and list its windows. Waits until the app shows a window.",
              schema: schema(["activate": ["type": "boolean", "description": "Bring the app to the front after launching (default false: it stays behind the user's windows)."]], required: ["app"])),
+        Tool(name: "wisp_activate", description: "Bring an app (and optionally one of its windows) to the front. Only for the rare app that ignores in-place input; Wisp normally operates without raising windows.",
+             schema: schema([:], required: ["app"])),
         Tool(name: "wisp_end", description: "End the control session for an app, a Chrome tab (closes it), or everything (no app/tab), hiding the cursor and banner. A bare wisp_end ends the turn: Chrome tabs you opened that are not marked deliverable/handoff are closed.", schema: schema([:])),
         Tool(name: "wisp_turn_end", description: "End every Wisp session: call when the task is finished or the user interrupts; closes unmarked agent tabs and hides the cursor.", schema: ["type": "object", "properties": [:]]),
         Tool(name: "wisp_cancel", description: "Cancel the action currently running in the daemon.", schema: ["type": "object", "properties": [:]]),
+        Tool(name: "wisp_status", description: "Daemon status: what Wisp is controlling, activity (idle/observing/acting/paused), whether the screen is locked, open sessions, a pending approval prompt, and the last user intervention.", schema: ["type": "object", "properties": [:]]),
+        Tool(name: "wisp_doctor", description: "Health check: daemon version and pid, and whether Accessibility (required) and Screen Recording (screenshots) are granted, with what to tell the user if not.", schema: ["type": "object", "properties": [:]]),
+        Tool(name: "wisp_instructions", description: "App-specific guidance catalog: `list` shows every built-in and user instruction file; `show` (app) prints the candidates, the matched files and the composed guidance for an app without controlling it.",
+             schema: ["type": "object", "properties": ["command": ["type": "string", "enum": ["list", "show"]], "app": ["type": "string"]], "required": ["command"]]),
+        Tool(name: "wisp_policy", description: "Read or change the Wisp policy (~/.config/wisp/policy.json): deny/allow/background lists, approval mode (off|high-risk|all), highRisk, forbidden, blockedURLs, allowSecureFields, cursorEnabled, lensEnabled, bannerText, bannerHint, instructionsMode (merge|replace|off), chromePort, settle timings. `set` merges `changes` into the current policy. Changing policy is a system-settings-class action: confirm with the user first.",
+             schema: ["type": "object", "properties": ["command": ["type": "string", "enum": ["get", "set"]], "changes": ["type": "object", "description": "Policy fields to merge for `set`."]], "required": ["command"]]),
+        Tool(name: "wisp_approvals", description: "Per-app approval grants (session/always): `list` shows them, `clear` revokes one app (`app`) or all.",
+             schema: ["type": "object", "properties": ["command": ["type": "string", "enum": ["list", "clear"]], "app": ["type": "string", "description": "clear: bundle id to revoke (omit to revoke all)."]], "required": ["command"]]),
+        Tool(name: "wisp_log", description: "Tail the daemon log (default 60 lines) for troubleshooting.",
+             schema: ["type": "object", "properties": ["lines": ["type": "integer"]]]),
         Tool(name: "wisp_chrome", description: "Chrome DevTools helpers: status, launch (starts Chrome hidden in the background with a debug port and a dedicated profile; visible=true shows it), tabs (with [agent]/[deliverable]/[handoff] marks), new (url), goto (tab,url), eval (tab, expression), close, back, forward, reload, upload (tab, files; el optional: fills the file input you clicked), dialog (tab, accept, text: answers the alert/confirm/prompt that wisp_state reports), mark (tab, mark: deliverable/handoff keep the tab past wisp_end), show (tab optional: bring Chrome forward), hide. Then use `tab` in the other tools.",
              schema: ["type": "object", "properties": ["command": ["type": "string", "enum": ["status", "launch", "tabs", "new", "goto", "eval", "close", "back", "forward", "reload", "upload", "dialog", "mark", "show", "hide"]],
                                                        "tab": ["type": "string"], "url": ["type": "string"], "expression": ["type": "string"], "port": ["type": "integer"], "profile": ["type": "string"],
@@ -150,7 +178,8 @@ final class MCPServer {
         if let app = a["app"].string { j["app"] = .string(app) }
         if let w = a["window"].string { j["window"] = .string(w) }
         if j.isEmpty { throw WispError(.invalidParams, "specify `app` or `tab`") }
-        for k in ["full", "query", "screenshot", "bounds", "menus", "maxLines", "observe", "instructions"] where !a[k].isNull { j[k] = a[k] }
+        for k in ["full", "query", "screenshot", "bounds", "menus", "maxLines", "observe", "instructions", "space", "cursor", "activate"] where !a[k].isNull { j[k] = a[k] }
+        if a["hid"].bool == true { j["delivery"] = "hid" }
         return .object(j)
     }
 
@@ -200,6 +229,62 @@ final class MCPServer {
             var a: [String: JSON] = ["kind": "click"]
             for k in ["el", "at", "button", "count"] where !args[k].isNull { a[k] = args[k] }
             return try perform(.object(a))
+        case "wisp_move", "wisp_mouse_down", "wisp_mouse_up":
+            var a: [String: JSON] = ["kind": .string(tool == "wisp_move" ? "move" : tool == "wisp_mouse_down" ? "mouse_down" : "mouse_up")]
+            for k in ["el", "at"] where !args[k].isNull { a[k] = args[k] }
+            return try perform(.object(a))
+        case "wisp_windows":
+            let r = try client.call(Proto.Method.appWindows, try targetParams(args))
+            let lines = (r["windows"].array ?? []).map { w in "\(w["id"].int.map(String.init) ?? "?")\t\(w["focused"].bool == true ? "*" : " ")\t\(w["title"].string ?? "")\t\(w["frame"].stringified())" }
+            return [["type": "text", "text": .string(lines.isEmpty ? "no windows" : "id\tfocused\ttitle\tframe\n" + lines.joined(separator: "\n"))]]
+        case "wisp_activate":
+            let r = try client.call(Proto.Method.appActivate, try targetParams(args), timeout: 300)
+            return [["type": "text", "text": .string("activated \(r["app"]["name"].string ?? "") window \(r["window"]["id"].int.map(String.init) ?? "?")")]]
+        case "wisp_status":
+            return [["type": "text", "text": .string(try client.call(Proto.Method.sessionStatus).stringified(pretty: true))]]
+        case "wisp_doctor":
+            let ping = try client.call(Proto.Method.ping)
+            let ax = ping["permissions"]["accessibility"].bool == true
+            let screen = ping["permissions"]["screenRecording"].bool == true
+            var lines = ["wispd \(ping["version"].string ?? "?") pid \(ping["pid"].int ?? 0), api \(ping["serverApiVersion"].string ?? "?")",
+                         "accessibility: \(ax ? "granted" : "MISSING (required): ask the user to allow Wisp in System Settings > Privacy & Security > Accessibility; the Wisp menu bar item has a shortcut")",
+                         "screen recording: \(screen ? "granted" : "missing (screenshots disabled): ask the user to allow Wisp in System Settings > Privacy & Security > Screen Recording")"]
+            lines.append("policy: \(WispPaths.policyPath); instructions: \(WispPaths.instructionsDir.path); log: \(WispPaths.logPath)")
+            return [["type": "text", "text": .string(lines.joined(separator: "\n"))]]
+        case "wisp_instructions":
+            switch args["command"].string ?? "list" {
+            case "show":
+                guard let app = args["app"].string else { throw WispError(.invalidParams, "show needs `app`") }
+                let r = try client.call(Proto.Method.appInstructions, ["app": .string(app)])
+                let matched = (r["matched"].array ?? []).map { "\($0["stem"].string ?? "") (\($0["source"].string ?? ""))" }
+                var text = "app: \(r["app"]["name"].string ?? "") (\(r["app"]["bundleId"].string ?? "no bundle id"))\(r["isBrowser"].bool == true ? ", browser" : "")\nmode: \(r["mode"].string ?? "")\ncandidates: \((r["candidates"].array ?? []).compactMap { $0.string }.joined(separator: ", "))\nmatched: \(matched.isEmpty ? "none" : matched.joined(separator: ", "))"
+                if let t = r["text"].string { text += "\n\n" + t }
+                return [["type": "text", "text": .string(text)]]
+            default:
+                let r = Commands.instructionsCatalog()
+                let rows = (r["stems"].array ?? []).map { "\($0["stem"].string ?? "")  \($0["overridesBuiltin"].bool == true ? "user (overrides builtin)" : ($0["source"].string ?? ""))" }
+                return [["type": "text", "text": .string(rows.joined(separator: "\n") + "\n(user files: \(r["directory"].string ?? ""))")]]
+            }
+        case "wisp_policy":
+            if args["command"].string == "set" {
+                var p = try client.call(Proto.Method.policyGet)
+                for (k, v) in args["changes"].object ?? [:] { p[k] = v }
+                return [["type": "text", "text": .string(try client.call(Proto.Method.policySet, p).stringified(pretty: true))]]
+            }
+            return [["type": "text", "text": .string(try client.call(Proto.Method.policyGet).stringified(pretty: true))]]
+        case "wisp_approvals":
+            if args["command"].string == "clear" {
+                var p: [String: JSON] = [:]
+                if let app = args["app"].string { p["app"] = .string(app) }
+                _ = try client.call(Proto.Method.approvalsClear, .object(p))
+                return [["type": "text", "text": .string(args["app"].string.map { "approval revoked for \($0)" } ?? "approvals cleared")]]
+            }
+            let r = try client.call(Proto.Method.approvalsList)
+            let rows = (r["grants"].array ?? []).map { "\($0["app"].string ?? "")  \($0["grant"].string ?? "")\($0["active"].bool == false ? " (expired: from an earlier daemon run)" : "")" }
+            return [["type": "text", "text": .string(rows.isEmpty ? "no approvals" : rows.joined(separator: "\n"))]]
+        case "wisp_log":
+            let r = try client.call(Proto.Method.daemonLog, ["lines": .int(args["lines"].int ?? 60)])
+            return [["type": "text", "text": .string(r["log"].string ?? "")]]
         case "wisp_type": return try perform(["kind": "type", "text": args["text"]])
         case "wisp_key": return try perform(["kind": "key", "key": args["key"]])
         case "wisp_set": return try perform(["kind": "set", "el": args["el"], "value": args["value"]])
@@ -284,6 +369,6 @@ final class MCPServer {
     }
 
     static let instructions = """
-    Wisp controls macOS apps through accessibility and Chrome tabs through DevTools. Workflow: wisp_state (reads an indexed tree) → act with wisp_click/wisp_set/wisp_key/... (each returns the new state diff) → repeat. Always use indices from the latest state. Prefer wisp_set for text fields and wisp_paste for long/multi-line text. Ask the user before irreversible or outward-facing actions (sending, deleting, paying, logging in, changing settings). If a result says "user input detected", stop and re-read state. Some apps (System Settings, Terminal, Mail, ...) require the user to approve in a Wisp prompt on screen before the first call succeeds; if a tool reports that the user declined or that an app is forbidden or denied by policy, do not retry, tell the user.
+    Wisp controls macOS apps through accessibility and Chrome tabs through DevTools. Workflow: wisp_state (reads an indexed tree) → act with wisp_click/wisp_set/wisp_key/... (each returns the new state diff) → repeat. Every CLI capability is a tool: wisp_windows/wisp_activate for windows, wisp_move/wisp_mouse_down/wisp_mouse_up for pointer control, wisp_status/wisp_doctor/wisp_log for health, wisp_instructions/wisp_policy/wisp_approvals for configuration, wisp_chrome for DevTools tabs, wisp_turn_end when done. Always use indices from the latest state. Prefer wisp_set for text fields and wisp_paste for long/multi-line text. Ask the user before irreversible or outward-facing actions (sending, deleting, paying, logging in, changing settings). If a result says "user input detected", stop and re-read state. Some apps (System Settings, Terminal, Mail, ...) require the user to approve in a Wisp prompt on screen before the first call succeeds; if a tool reports that the user declined or that an app is forbidden or denied by policy, do not retry, tell the user.
     """
 }

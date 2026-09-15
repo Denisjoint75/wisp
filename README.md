@@ -132,9 +132,18 @@ to override or extend a text (`wisp instructions list` shows every stem, `wisp i
 what an app would receive), and set `instructionsMode` in the policy (`wisp policy set --instructions-mode
 merge|replace|off`) to choose whether user files merge with, replace, or switch off the built-in texts.
 
-`wisp --json …` prints machine-readable JSON. `wisp mcp` serves the same operations as MCP tools
-(`wisp_state`, `wisp_click`, `wisp_set`, …); add it to Claude Code with
-`claude mcp add wisp -- /path/to/wisp mcp`. The model-facing guide lives in [skills/wisp/SKILL.md](skills/wisp/SKILL.md).
+`wisp --json …` prints machine-readable JSON. `wisp mcp` serves every CLI capability as an MCP tool; add it to
+Claude Code with `claude mcp add wisp -- wisp mcp`. The tools mirror the commands one to one:
+
+| Area | Tools |
+|---|---|
+| Observe | `wisp_apps`, `wisp_windows`, `wisp_state`, `wisp_screenshot` |
+| Act (each returns the new state diff; all accept `observe`, `space`, `cursor`, `activate`, `hid` and the state options) | `wisp_click`, `wisp_move`, `wisp_mouse_down`, `wisp_mouse_up`, `wisp_type`, `wisp_key`, `wisp_set`, `wisp_scroll`, `wisp_drag`, `wisp_action`, `wisp_select_text`, `wisp_paste`, `wisp_batch` |
+| Apps and sessions | `wisp_launch`, `wisp_activate`, `wisp_end`, `wisp_turn_end`, `wisp_cancel`, `wisp_status` |
+| Chrome over DevTools | `wisp_chrome` (status, launch, tabs, new, goto, eval, close, back, forward, reload, upload, dialog, mark, show, hide) |
+| Configuration and health | `wisp_instructions`, `wisp_policy`, `wisp_approvals`, `wisp_doctor`, `wisp_log` |
+
+The model-facing guide lives in [skills/wisp/SKILL.md](skills/wisp/SKILL.md).
 
 ## How it works
 

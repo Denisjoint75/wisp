@@ -3,6 +3,16 @@
 All notable changes to Wisp are documented here. The section for each released version is shown in the Sparkle
 update dialog and in the GitHub release. This project follows [Semantic Versioning](https://semver.org).
 
+## [0.1.1] - 2026-09-15
+
+### Added
+- The MCP server now mirrors the CLI one to one. New tools: `wisp_windows`, `wisp_activate`, `wisp_move`,
+  `wisp_mouse_down`, `wisp_mouse_up`, `wisp_status`, `wisp_doctor`, `wisp_instructions` (list/show),
+  `wisp_policy` (get/set with a `changes` object), `wisp_approvals` (list/clear, per app or all) and `wisp_log`.
+- Every action tool accepts the shared CLI options: `observe`, `space`, `cursor`, `activate`, `hid`, and the state
+  options (`full`, `query`, `screenshot`, `bounds`, `menus`, `maxLines`, `instructions`) for the state returned
+  after the action.
+
 ## [0.1.0] - 2026-09-15
 
 Feature parity release with the Codex desktop app's Computer Use, based on an audit of what it ships.

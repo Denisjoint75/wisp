@@ -420,7 +420,9 @@ enum Commands {
     }
 
     /// `wisp instructions list`: every built-in stem plus the user's own files, without talking to the daemon.
-    static func instructionsList(_ out: Output) -> Int32 {
+    /// The instruction catalog as seen from this machine: built-in stems plus user files, no daemon needed.
+    /// Shared by `wisp instructions list` and the MCP `wisp_instructions` tool.
+    static func instructionsCatalog() -> JSON {
         let dir = WispPaths.instructionsDir
         let userStems = Set(((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? [])
             .filter { $0.hasSuffix(".md") }.map { String($0.dropLast(3)) })
@@ -430,13 +432,18 @@ enum Commands {
             let source = userStems.contains(stem) ? "user" : "builtin"
             rows.append(["stem": .string(stem), "source": .string(source), "overridesBuiltin": .bool(userStems.contains(stem) && builtin.contains(stem))])
         }
-        if out.json { print(JSON.object(["directory": .string(dir.path), "stems": .array(rows)]).stringified(pretty: true)); return 0 }
-        for r in rows {
+        return ["directory": .string(dir.path), "stems": .array(rows), "builtinCount": .int(builtin.count), "userCount": .int(userStems.count)]
+    }
+
+    static func instructionsList(_ out: Output) -> Int32 {
+        let catalog = instructionsCatalog()
+        if out.json { print(catalog.stringified(pretty: true)); return 0 }
+        for r in catalog["stems"].array ?? [] {
             let stem = r["stem"].string ?? ""
             let mark = r["overridesBuiltin"].bool == true ? "user (overrides builtin)" : (r["source"].string ?? "")
             print("\(stem.padding(toLength: max(stem.count, 32), withPad: " ", startingAt: 0))  \(mark)")
         }
-        print("\(builtin.count) builtin, \(userStems.count) user (\(dir.path))")
+        print("\(catalog["builtinCount"].int ?? 0) builtin, \(catalog["userCount"].int ?? 0) user (\(catalog["directory"].string ?? ""))")
         return 0
     }
 
