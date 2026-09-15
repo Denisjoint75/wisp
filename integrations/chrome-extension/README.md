@@ -19,6 +19,12 @@ Then in Chrome: open `chrome://extensions`, turn on **Developer mode**, click **
 folder printed by the command. The toolbar icon shows a red `!` until the extension can reach `wispd`; click it
 for status. `wisp chrome extension status` reports the same from the command line.
 
+The host manifest (`~/Library/Application Support/<browser>/NativeMessagingHosts/sb.moe.wisp.json`) points at
+`~/Library/Application Support/Wisp/native-host.sh`, a `#!/bin/sh` script that execs `wisp native-host`, rather than
+at the `wisp` binary: Chrome starts hosts with `posix_spawn`, and on some macOS/Chrome combinations a Mach-O started
+that way dies before it runs ("Native host has exited" in the popup), while a shell-script host works. If the popup
+keeps saying that after an upgrade, run `wisp chrome extension install` again to rewrite the manifest.
+
 After updating Wisp, run `wisp chrome extension install` again and click the reload icon of the extension on
 `chrome://extensions`.
 

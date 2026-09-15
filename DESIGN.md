@@ -876,7 +876,9 @@ Pieces (`integrations/chrome-extension`, `Sources/wispd/ExtensionBridge.swift`, 
   (`onbeniodfnedfepagelnhdlahohkcnll`) for "Load unpacked" installs and a later store listing alike.
 - **Native host** (`wisp native-host`). Chrome starts it from the host manifest written by `wisp chrome extension
   install` (`~/Library/Application Support/<browser>/NativeMessagingHosts/sb.moe.wisp.json`, `allowed_origins`
-  = the Wisp extension only). It is a relay: it registers on the daemon socket (`bridge.register`, starting `wispd`
+  = the Wisp extension only). The manifest's `path` is a `#!/bin/sh` launcher
+  (`~/Library/Application Support/Wisp/native-host.sh`) that execs the CLI, because Chrome's `posix_spawn` of a
+  Mach-O host dies before `main` on some macOS/Chrome combinations while a script host works. It is a relay: it registers on the daemon socket (`bridge.register`, starting `wispd`
   when needed), forwards extension messages as `bridge.message` notifications and writes the daemon's
   `bridge.send` notifications back. Chrome's framing (u32 native-endian length + JSON) is the socket framing, so
   frames pass through unchanged. It exits when either side closes; the extension reconnects with backoff, and an

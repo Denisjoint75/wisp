@@ -51,10 +51,41 @@ public enum ChromeExtension {
         browsers.first { $0.key == key.lowercased() }
     }
 
-    /// The manifest the browser reads to start the host: `wisp native-host`, allowed for the Wisp extension only.
-    public static func hostManifest(binary: String) -> JSON {
+    /// The manifest the browser reads to start the host, allowed for the Wisp extension only. `path` is the launcher
+    /// script from `hostLauncherScript`, not the `wisp` binary: see that function for why.
+    public static func hostManifest(launcher: String) -> JSON {
         ["name": .string(hostName), "description": "Wisp native messaging host (wisp native-host)",
-         "path": .string(binary), "type": "stdio", "allowed_origins": .array([.string(origin)])]
+         "path": .string(launcher), "type": "stdio", "allowed_origins": .array([.string(origin)])]
+    }
+
+    /// Where `wisp chrome extension install` writes the launcher the host manifests point at.
+    public static var hostLauncherURL: URL { WispPaths.supportDir.appendingPathComponent("native-host.sh") }
+
+    /// The native messaging host is registered as a `#!/bin/sh` script that execs `wisp native-host`, not as the
+    /// binary itself. Chrome starts hosts with `posix_spawn`, and on some macOS/Chrome combinations (seen with
+    /// Chrome 152 on macOS 26) a Mach-O started that way dies before `main` runs, so the extension only ever sees
+    /// "Native host has exited"; the same binary exec'd from a `#!/bin/sh` host works. The script is the one thing
+    /// that has proven to start everywhere, and it also keeps the manifest valid across CLI upgrades.
+    public static func hostLauncherScript(binary: String) -> String {
+        let quoted = "'" + binary.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        return """
+        #!/bin/sh
+        # Wisp native messaging host launcher, written by `wisp chrome extension install`.
+        # Chrome starts this script (see the sb.moe.wisp.json manifest next to your browser profile) and it execs the
+        # `wisp` CLI in host mode. It is a script rather than the binary because Chrome cannot start a Mach-O native
+        # messaging host directly on some macOS versions (the process dies before main); a #!/bin/sh host works.
+        exec \(quoted) native-host "$@"
+
+        """
+    }
+
+    /// The `wisp` binary a launcher script written by `hostLauncherScript` execs, or nil if it is not one of ours.
+    public static func hostLauncherTarget(script: String) -> String? {
+        for line in script.split(separator: "\n") where line.hasPrefix("exec '") {
+            guard let end = line.range(of: "' native-host") else { continue }
+            return String(line[line.index(line.startIndex, offsetBy: 6)..<end.lowerBound]).replacingOccurrences(of: "'\\''", with: "'")
+        }
+        return nil
     }
 
     /// Chrome's extension id for a manifest `key`: the first 32 hex digits of the SHA-256 of the DER public key,
@@ -79,7 +110,6 @@ public enum ChromeExtension {
         var candidates = [
             dir.deletingLastPathComponent().appendingPathComponent("Resources/chrome-extension"),
             dir.appendingPathComponent("Wisp.app/Contents/Resources/chrome-extension"),
-            URL(fileURLWithPath: "/Applications/Wisp.app/Contents/Resources/chrome-extension"),
             URL(fileURLWithPath: cwd).appendingPathComponent("integrations/chrome-extension"),
         ]
         var up = dir
@@ -87,6 +117,9 @@ public enum ChromeExtension {
             up = up.deletingLastPathComponent()
             candidates.append(up.appendingPathComponent("integrations/chrome-extension"))
         }
+        // The installed app last, so a CLI run from a source checkout ships the checkout's extension, not the
+        // one of whatever Wisp.app happens to be installed.
+        candidates.append(URL(fileURLWithPath: "/Applications/Wisp.app/Contents/Resources/chrome-extension"))
         return candidates.first(where: has)
     }
 }

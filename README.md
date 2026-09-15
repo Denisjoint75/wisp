@@ -126,7 +126,8 @@ Chrome tabs are driven over the DevTools Protocol, in one of two places:
 
 - **Your own Chrome, through the Wisp extension** (the way the Codex desktop app works). `wisp chrome extension
   install` copies the extension to `~/Library/Application Support/Wisp/chrome-extension` and registers its native
-  messaging host for Chrome (and Brave, Edge, Chromium, Arc or Vivaldi when present); load that folder once on
+  messaging host (a small launcher script that execs `wisp native-host`) for Chrome (and Brave, Edge, Chromium,
+  Arc or Vivaldi when present); load that folder once on
   `chrome://extensions` (Developer mode, *Load unpacked*). From then on `wisp chrome tabs` lists your tabs first
   (tagged `[user]`), `--tab active` is the tab you are looking at, and `wisp chrome new URL` opens the page in your
   browser. Wisp attaches Chrome's debugger to a tab only while it works in it and lets go at `wisp end`.
@@ -212,6 +213,8 @@ The model-facing guide lives in [integrations/claude-plugin/skills/wisp/SKILL.md
   `Input.dispatch*` for actions; `Page.captureScreenshot`; `Runtime.evaluate` for `wisp chrome eval`. The same
   commands reach your own browser through the extension: its service worker attaches `chrome.debugger` to the tab
   and relays commands and events over a native messaging host (`wisp native-host`, a relay to the daemon socket).
+  The host manifest points at `~/Library/Application Support/Wisp/native-host.sh`, a `#!/bin/sh` script that execs
+  the CLI, because Chrome cannot start a Mach-O host directly on every macOS (the process dies before it runs).
   Synthesized mouse events never reach Chrome's web content, which is why both paths use DevTools.
 
 ### Safety and confirmations

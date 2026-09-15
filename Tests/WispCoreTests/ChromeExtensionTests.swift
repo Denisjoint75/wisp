@@ -29,11 +29,26 @@ final class ChromeExtensionTests: XCTestCase {
     }
 
     func testHostManifestAllowsOnlyTheWispExtension() {
-        let j = ChromeExtension.hostManifest(binary: "/Applications/Wisp.app/Contents/MacOS/wisp")
+        let j = ChromeExtension.hostManifest(launcher: "/Users/someone/Library/Application Support/Wisp/native-host.sh")
         XCTAssertEqual(j["name"].string, "sb.moe.wisp")
         XCTAssertEqual(j["type"].string, "stdio")
-        XCTAssertEqual(j["path"].string, "/Applications/Wisp.app/Contents/MacOS/wisp")
+        XCTAssertEqual(j["path"].string, "/Users/someone/Library/Application Support/Wisp/native-host.sh")
         XCTAssertEqual(j["allowed_origins"].array?.compactMap { $0.string }, ["chrome-extension://onbeniodfnedfepagelnhdlahohkcnll/"])
+    }
+
+    func testHostLauncherScriptExecsTheBinaryAndRoundTrips() {
+        // The host is a #!/bin/sh script that execs `wisp native-host`; Chrome cannot start the Mach-O directly on
+        // every macOS. Paths with spaces and quotes must survive the shell quoting.
+        for binary in ["/Applications/Wisp.app/Contents/MacOS/wisp", "/Users/some one/it's/wisp"] {
+            let s = ChromeExtension.hostLauncherScript(binary: binary)
+            XCTAssertTrue(s.hasPrefix("#!/bin/sh\n"), "must start with a shebang")
+            XCTAssertTrue(s.hasSuffix("native-host \"$@\"\n"), "must pass the browser's arguments through")
+            XCTAssertEqual(ChromeExtension.hostLauncherTarget(script: s), binary)
+        }
+        XCTAssertEqual(ChromeExtension.hostLauncherScript(binary: "/a/wisp").components(separatedBy: "\n").last { $0.hasPrefix("exec") },
+                       "exec '/a/wisp' native-host \"$@\"")
+        XCTAssertNil(ChromeExtension.hostLauncherTarget(script: "#!/bin/sh\necho hi\n"))
+        XCTAssertNil(ChromeExtension.hostLauncherTarget(script: "not a script"))
     }
 
     func testBrowserManifestLocations() {

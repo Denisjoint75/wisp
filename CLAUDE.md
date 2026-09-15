@@ -32,7 +32,10 @@ of the ChatGPT/Codex desktop app's Computer Use (Part 1) and the design this cod
   user's own browser. `scripts/package.sh` copies it into `Wisp.app/Contents/Resources/chrome-extension` and zips it
   as a release asset; `scripts/set-version.sh` stamps its `manifest.json` version. The manifest `key` pins the
   extension id `onbeniodfnedfepagelnhdlahohkcnll` and the native messaging host is `sb.moe.wisp` (both in
-  `Sources/WispCore/ChromeExtension.swift`); never change either, installed host manifests depend on them.
+  `Sources/WispCore/ChromeExtension.swift`); never change either, installed host manifests depend on them. The host
+  manifest must point at the launcher script (`ChromeExtension.hostLauncherScript`, written to
+  `~/Library/Application Support/Wisp/native-host.sh`), never at the `wisp` binary: Chrome cannot start a Mach-O
+  host directly on every macOS (the process dies before `main`), a `#!/bin/sh` host that execs it works.
 - `assets/icon/` - icon sources (SVG, 1024 PNG, `Wisp.icon` Icon Composer document); `assets/sparkle-public-key.txt`.
 - `.github/workflows/release.yml` - signed, notarized release pipeline (see below).
 

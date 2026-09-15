@@ -325,6 +325,7 @@ enum Commands {
                         if out.json { print(r.stringified(pretty: true)); return 0 }
                         print("extension copied to \(r["dir"].string ?? "")")
                         for h in r["hosts"].array ?? [] { print("native messaging host registered for \(h["browser"].string ?? ""): \(h["path"].string ?? "")") }
+                        print("host launcher: \(r["launcher"].string ?? "") -> \(r["binary"].string ?? "") native-host")
                         let first = (r["hosts"].array ?? []).first?["browser"].string ?? "the browser"
                         print("""
 

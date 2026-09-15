@@ -2,9 +2,10 @@ import Foundation
 import WispCore
 
 /// `wisp chrome extension install|status|path`: copies the bundled extension where the browser can load it and
-/// registers the native messaging host manifest(s) that let the extension start `wisp native-host`.
+/// registers the native messaging host manifest(s) that let the extension start `wisp native-host` (through the
+/// launcher script from `ChromeExtension.hostLauncherScript`).
 enum ChromeExtensionSetup {
-    /// The absolute path of the running `wisp` (symlinks resolved), which the host manifest points at.
+    /// The absolute path of the running `wisp` (symlinks resolved), which the launcher script execs.
     static var binaryPath: String {
         (Bundle.main.executableURL ?? URL(fileURLWithPath: CommandLine.arguments[0])).resolvingSymlinksInPath().path
     }
@@ -31,11 +32,14 @@ enum ChromeExtensionSetup {
             try fm.copyItem(at: src, to: dst)
         }
         let binary = binaryPath
+        let launcher = ChromeExtension.hostLauncherURL
+        try Data(ChromeExtension.hostLauncherScript(binary: binary).utf8).write(to: launcher)
+        try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: launcher.path)
         var hosts: [JSON] = []
         for b in try selectBrowsers(keys) {
             let url = b.hostManifestURL()
             try fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try Data((ChromeExtension.hostManifest(binary: binary).stringified(pretty: true) + "\n").utf8).write(to: url)
+            try Data((ChromeExtension.hostManifest(launcher: launcher.path).stringified(pretty: true) + "\n").utf8).write(to: url)
             hosts.append(["browser": .string(b.name), "key": .string(b.key), "bundleId": .string(b.bundleId), "path": .string(url.path)])
         }
         var opened = false
@@ -47,7 +51,7 @@ enum ChromeExtensionSetup {
             p.standardError = FileHandle.nullDevice
             if (try? p.run()) != nil { p.waitUntilExit(); opened = p.terminationStatus == 0 }
         }
-        return ["dir": .string(dst.path), "binary": .string(binary), "id": .string(ChromeExtension.id), "hosts": .array(hosts), "opened": .bool(opened)]
+        return ["dir": .string(dst.path), "binary": .string(binary), "launcher": .string(launcher.path), "id": .string(ChromeExtension.id), "hosts": .array(hosts), "opened": .bool(opened)]
     }
 
     /// What is installed on disk plus, when the daemon runs, whether the extension is connected.
@@ -59,8 +63,17 @@ enum ChromeExtensionSetup {
             let url = b.hostManifestURL()
             guard fm.fileExists(atPath: url.path) else { return nil }
             let m = fm.contents(atPath: url.path).flatMap { try? JSON.parse($0) }
-            let ok = m?["allowed_origins"].array?.contains { $0.string == ChromeExtension.origin } == true && fm.isExecutableFile(atPath: m?["path"].string ?? "")
-            return ["browser": .string(b.name), "key": .string(b.key), "path": .string(url.path), "binary": m?["path"] ?? .null, "valid": .bool(ok)]
+            let host = m?["path"].string ?? ""
+            // A manifest is valid when it allows our extension and Chrome can start what it points at. Manifests
+            // written before the launcher script existed point straight at the binary; report them as stale so
+            // `install` gets re-run (Chrome cannot start the binary directly on every macOS, see ChromeExtension).
+            let script = fm.contents(atPath: host).flatMap { String(data: $0, encoding: .utf8) }
+            let target = script.flatMap(ChromeExtension.hostLauncherTarget(script:))
+            let isLauncher = target != nil
+            let ok = m?["allowed_origins"].array?.contains { $0.string == ChromeExtension.origin } == true
+                && fm.isExecutableFile(atPath: host) && isLauncher && fm.isExecutableFile(atPath: target ?? "")
+            return ["browser": .string(b.name), "key": .string(b.key), "path": .string(url.path), "host": .string(host),
+                    "binary": target.map { .string($0) } ?? .null, "launcher": .bool(isLauncher), "valid": .bool(ok)]
         }
         var out: [String: JSON] = ["id": .string(ChromeExtension.id), "dir": .string(dir.path), "installed": .bool(manifestVersion != nil),
                                    "version": manifestVersion.map { .string($0) } ?? .null, "hosts": .array(hosts), "bundled": ChromeExtension.bundledDir().map { .string($0.path) } ?? .null]
@@ -73,7 +86,11 @@ enum ChromeExtensionSetup {
         let hosts = r["hosts"].array ?? []
         lines.append("extension: \(r["installed"].bool == true ? "copied to \(r["dir"].string ?? "") (version \(r["version"].string ?? "?"))" : "not installed (run `wisp chrome extension install`)")")
         if hosts.isEmpty { lines.append("native messaging host: not registered for any browser") }
-        for h in hosts { lines.append("native messaging host: \(h["browser"].string ?? "")  \(h["valid"].bool == true ? "ok" : "INVALID (re-run install)")  \(h["path"].string ?? "")") }
+        for h in hosts {
+            let state = h["valid"].bool == true ? "ok" : (h["launcher"].bool == true ? "INVALID (re-run install)" : "STALE, points at the binary instead of the launcher script (re-run install)")
+            lines.append("native messaging host: \(h["browser"].string ?? "")  \(state)  \(h["path"].string ?? "")")
+        }
+        if let b = hosts.first?["binary"].string { lines.append("host launcher: \(hosts.first?["host"].string ?? "") -> \(b) native-host") }
         let b = r["bridge"]
         if b.isNull { lines.append("bridge: wispd not running") }
         else if b["connected"].bool == true {
