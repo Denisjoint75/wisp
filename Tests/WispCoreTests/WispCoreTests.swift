@@ -264,4 +264,54 @@ final class ErrorTextTests: XCTestCase {
             if let t = WispError.userFacingText(for: code) { XCTAssertTrue(t.hasSuffix("(\(code.name))"), t) }
         }
     }
+
+    func testBudgetListsLandmarksBelowTheCut() {
+        let tree = """
+        # Chrome tab 1 — "Results"
+        web "Results"
+          [0] main
+            [1] heading "Results"
+            [2] link "Item 1"
+            [3] link "Item 2"
+            [4] link "Item 3"
+            [5] nav "pagination" offscreen
+              [6] btn "Previous" disabled offscreen
+              [7] btn "Go to page 2" offscreen
+                [8] txt "2" offscreen
+              [9] btn "Go to page 3" offscreen
+              [10] btn "Go to page 4" offscreen
+              [11] btn "Go to page 5" offscreen
+              [12] btn "Go to page 6" offscreen
+              [13] btn "Go to page 7" offscreen
+              [14] btn "Go to page 8" offscreen
+              [15] btn "Go to next page, page 2" offscreen
+            [16] footer offscreen
+              [17] link "Privacy" offscreen
+              group
+                [18] link "Terms" offscreen
+        """
+        let out = TreeDiff.budget(tree, maxLines: 4)
+        let lines = out.components(separatedBy: "\n")
+        XCTAssertTrue(lines[4].hasPrefix("… 18 more lines omitted"), lines[4])
+        XCTAssertTrue(lines[5].hasPrefix("# below the cut"))
+        // Items 1..3 are controls of `main`, but `main` sits above the cut, so they are not repeated; the nav's
+        // buttons are the nav's, not main's. The disabled one is skipped; of the eight enabled ones the first
+        // four and the last two are listed around the count, so "next page" stays visible.
+        XCTAssertEqual(Array(lines[6...]), [
+            "    [5] nav \"pagination\" offscreen",
+            "      [7] btn \"Go to page 2\" offscreen",
+            "      [9] btn \"Go to page 3\" offscreen",
+            "      [10] btn \"Go to page 4\" offscreen",
+            "      [11] btn \"Go to page 5\" offscreen",
+            "      … 2 more controls in this nav",
+            "      [14] btn \"Go to page 8\" offscreen",
+            "      [15] btn \"Go to next page, page 2\" offscreen",
+            "    [16] footer offscreen",
+            "      [17] link \"Privacy\" offscreen",
+            "        [18] link \"Terms\" offscreen",
+        ])
+        XCTAssertEqual(TreeDiff.budget(tree, maxLines: 100), tree, "within budget nothing changes")
+        let noLandmarks = TreeDiff.budget("# h\n[0] link \"a\"\n[1] link \"b\"\n[2] link \"c\"", maxLines: 2)
+        XCTAssertFalse(noLandmarks.contains("below the cut"), "no landmarks below the cut, no summary")
+    }
 }
