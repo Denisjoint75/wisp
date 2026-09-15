@@ -31,12 +31,35 @@ final class ExtensionBridge {
     private var pending: [Int: CheckedContinuation<JSON, Error>] = [:]
     private var transports: [Int: WeakTransport] = [:]
     private var keepAlive: Task<Void, Never>?
+    private var lastDisconnect: Date?
+    /// How long a request waits for the extension to come back after its service worker restarted mid-flight.
+    static let reconnectGrace: Double = 10
 
     private struct WeakTransport { weak var t: ExtensionTransport? }
 
     static let notConnectedMessage = "the Wisp Chrome extension is not connected: install it with `wisp chrome extension install` (then load it in the browser), or use the separate Wisp Chrome via `wisp chrome launch`"
 
     var isConnected: Bool { lock.lock(); defer { lock.unlock() }; return connection != nil }
+
+    /// Connected, or was until a moment ago: Chrome stops an idle MV3 service worker and the extension reconnects
+    /// within seconds, so a request that hits that window waits instead of failing (or, worse, falling back to the
+    /// separate Wisp Chrome as if the user had never installed the extension).
+    var recentlyConnected: Bool {
+        lock.lock(); defer { lock.unlock() }
+        if connection != nil { return true }
+        guard let d = lastDisconnect else { return false }
+        return Date().timeIntervalSince(d) < 60
+    }
+
+    /// Waits up to `timeout` seconds for a host to (re)register.
+    func waitForConnection(timeout: Double) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if isConnected { return true }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        return isConnected
+    }
 
     /// Summary for `chrome.status` and `wisp chrome extension status`.
     var info: JSON {
@@ -76,6 +99,7 @@ final class ExtensionBridge {
         connection = nil
         hello = .null
         connectedAt = nil
+        lastDisconnect = Date()
         let old = pending
         pending = [:]
         let oldTransports = transports
@@ -159,8 +183,20 @@ final class ExtensionBridge {
         return pending.removeValue(forKey: id)
     }
 
-    /// Sends a request to the extension and waits for its result.
+    /// Sends a request to the extension and waits for its result. When the extension is not there because its
+    /// service worker just restarted (`recentlyConnected`), the request waits for the reconnect and is sent once
+    /// more, so a worker restart in the middle of a command costs a few seconds instead of failing the command.
     func request(_ op: String, _ params: JSON = [:], timeout: Double = 20) async throws -> JSON {
+        do {
+            return try await requestOnce(op, params, timeout: timeout)
+        } catch let e as WispError where e.code == .chromeUnavailable || e.code == .notConnected {
+            guard recentlyConnected, await waitForConnection(timeout: ExtensionBridge.reconnectGrace) else { throw e }
+            Log.info("extension bridge: \(op) sent again after the extension reconnected")
+            return try await requestOnce(op, params, timeout: timeout)
+        }
+    }
+
+    private func requestOnce(_ op: String, _ params: JSON, timeout: Double) async throws -> JSON {
         guard let (conn, id) = allocate() else { throw WispError(.chromeUnavailable, ExtensionBridge.notConnectedMessage) }
         var msg = params.object ?? [:]
         msg["type"] = "request"
@@ -184,7 +220,7 @@ final class ExtensionBridge {
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 20_000_000_000)
                 guard let self = self, self.isConnected, !Task.isCancelled else { return }
-                _ = try? await self.request("ping", timeout: 10)
+                _ = try? await self.requestOnce("ping", [:], timeout: 10)
             }
         }
     }

@@ -271,8 +271,11 @@ actor Daemon {
                 sessions.removeAll()
             }
             if let t = params["tab"].string {
-                // Ending a tab closes it: a tab the agent is done with has no reason to stay open.
-                if let tab = try? await chrome.tab(t) { try? await chrome.closeTab(id: tab.id) }
+                // Ending a tab closes it: a tab the agent is done with has no reason to stay open. A tab marked
+                // `deliverable` or `handoff` is the user's now: it is only let go of (debugger detached), not closed.
+                if let tab = try? await chrome.tab(t) {
+                    if chrome.isKept(tab: tab.id) { chrome.dropTab(tab.id) } else { try? await chrome.closeTab(id: tab.id) }
+                }
                 chrome.dropTab(t)
             } else if params["app"].isNull {
                 // A bare `wisp end` is the end of the turn: unmarked agent tabs are scratch and go away, marks reset.

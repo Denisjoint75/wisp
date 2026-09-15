@@ -227,7 +227,14 @@ final class ChromeBackend {
     func listTabs() async throws -> [ChromeTabInfo] {
         var list: [ChromeTabInfo] = []
         var userIds = Set<String>()
-        if ExtensionBridge.shared.isConnected, let r = try? await ExtensionBridge.shared.request("tabs", timeout: 8) {
+        var userListed = false
+        // With the extension connected (or reconnecting after a service-worker restart) its answer is the truth:
+        // a failure is reported as such, never papered over by falling back to the separate Wisp Chrome, whose
+        // "port 9222 is not reachable" would send the agent looking in the wrong place.
+        if ExtensionBridge.shared.recentlyConnected {
+            let r: JSON
+            do { r = try await ExtensionBridge.shared.request("tabs", timeout: 8) }
+            catch { throw WispError(.chromeUnavailable, "the Chrome extension did not list its tabs: \(error)") }
             for t in r["tabs"].array ?? [] {
                 guard let id = t["id"].int else { continue }
                 let sid = String(id)
@@ -235,17 +242,21 @@ final class ChromeBackend {
                 list.append(ChromeTabInfo(id: sid, title: t["title"].string ?? "", url: t["url"].string ?? "", wsURL: nil, type: "page",
                                           mark: agentTabs[sid]?.label, browser: .user, active: t["active"].bool))
             }
+            userTabIds = userIds
+            userListed = true
         }
-        userTabIds = userIds
+        var wispListed = false
         do {
             list += try await devToolsTabs()
+            wispListed = true
         } catch {
             // No Wisp Chrome running: fine as long as the extension answered.
             if list.isEmpty { throw error }
         }
-        // Tabs the user closed by hand are gone for good; forget their marks.
+        // Tabs the user closed by hand are gone for good; forget their marks. Marks of a browser that was not
+        // listed this time (extension tabs carry numeric ids, Wisp Chrome tabs hex ones) are kept.
         let open = Set(list.map { $0.id })
-        agentTabs = agentTabs.filter { open.contains($0.key) }
+        agentTabs = agentTabs.filter { open.contains($0.key) || (Int($0.key) != nil ? !userListed : !wispListed) }
         return list
     }
 
@@ -315,6 +326,9 @@ final class ChromeBackend {
 
     /// Labels an agent tab for this turn; a tab the user opened becomes an agent tab once it is marked.
     func mark(tab id: String, _ m: Mark) { agentTabs[id] = m }
+
+    /// Whether a tab was marked `deliverable` or `handoff` this turn, i.e. it must stay open.
+    func isKept(tab id: String) -> Bool { if let m = agentTabs[id] { return m != Mark.none } else { return false } }
 
     /// End of turn: closes every unmarked agent tab (errors ignored) and forgets all marks; the next turn starts clean
     /// and a `deliverable`/`handoff` tab is an ordinary user tab from then on.
@@ -401,6 +415,9 @@ final class ChromeBackend {
 
     /// Resolves a tab by id, id prefix, "active"/"current", or a substring of its title/URL.
     func tab(_ spec: String) async throws -> ChromeTab {
+        // A tab already in use, addressed by its exact id, needs no fresh listing: through the extension every
+        // listing is a round trip to the browser, and a command chain addresses the same tab over and over.
+        if let t = tabs[spec], !t.conn.isClosed { return t }
         let list = try await listTabs()
         var info: ChromeTabInfo?
         if spec == "active" || spec == "current" || spec.isEmpty { info = list.first }
@@ -546,15 +563,21 @@ final class ChromeTab {
 
     func enableDomains() async throws {
         if domainsEnabled { return }
-        _ = try await conn.send("Page.enable")
-        _ = try await conn.send("DOM.enable")
-        _ = try await conn.send("Runtime.enable")
-        _ = try? await conn.send("Accessibility.enable")
-        _ = try? await conn.send("DOM.getDocument", ["depth": 0])
+        // The enables are independent, so they go out together: through the extension every command is a round
+        // trip to the browser's service worker, and the first `state` of a tab used to pay seven of them in a row.
+        let conn = self.conn
+        try await withThrowingTaskGroup(of: Void.self) { g in
+            for m in ["Page.enable", "DOM.enable", "Runtime.enable"] { g.addTask { _ = try await conn.send(m) } }
+            try await g.waitForAll()
+        }
         // Clicking a file input reports `Page.fileChooserOpened` instead of opening the native panel; `setFiles`
         // then fills it. Focus emulation keeps the page believing it is focused while Chrome sits hidden in the background.
-        _ = try? await conn.send("Page.setInterceptFileChooserDialog", ["enabled": true])
-        _ = try? await conn.send("Emulation.setFocusEmulationEnabled", ["enabled": true])
+        await withTaskGroup(of: Void.self) { g in
+            g.addTask { _ = try? await conn.send("Accessibility.enable") }
+            g.addTask { _ = try? await conn.send("DOM.getDocument", ["depth": 0]) }
+            g.addTask { _ = try? await conn.send("Page.setInterceptFileChooserDialog", ["enabled": true]) }
+            g.addTask { _ = try? await conn.send("Emulation.setFocusEmulationEnabled", ["enabled": true]) }
+        }
         domainsEnabled = true
     }
 
