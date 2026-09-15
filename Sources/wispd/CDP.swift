@@ -3,7 +3,7 @@ import Foundation
 import WispCore
 
 /// Minimal Chrome DevTools Protocol client over `URLSessionWebSocketTask`.
-final class CDPConnection {
+final class CDPConnection: CDPTransport {
     private let url: URL
     private var task: URLSessionWebSocketTask?
     private let session = URLSession(configuration: .ephemeral)
@@ -22,7 +22,7 @@ final class CDPConnection {
         task = t
         receiveLoop()
         // Probe the connection with a cheap command.
-        _ = try await send("Runtime.evaluate", ["expression": "1"], timeout: 8)
+        _ = try await call("Runtime.evaluate", ["expression": "1"], timeout: 8)
     }
 
     private func receiveLoop() {
@@ -87,7 +87,7 @@ final class CDPConnection {
         return pending.removeValue(forKey: id)
     }
 
-    func send(_ method: String, _ params: JSON = [:], timeout: Double = 20) async throws -> JSON {
+    func call(_ method: String, _ params: JSON, timeout: Double) async throws -> JSON {
         guard let task = task, !isClosed else { throw WispError(.notConnected, "CDP connection is closed") }
         let id = allocateId()
         let msg = JSON.object(["id": .int(id), "method": .string(method), "params": params])
@@ -112,6 +112,9 @@ final class CDPConnection {
 }
 
 struct ChromeTabInfo {
+    /// Which browser owns the tab: the separate Wisp Chrome (DevTools port) or the user's own browser (extension).
+    enum Browser: String { case wisp, user }
+
     var id: String
     var title: String
     var url: String
@@ -119,10 +122,16 @@ struct ChromeTabInfo {
     var type: String
     /// Set for tabs the agent opened: `agent` (unmarked scratch tab), `deliverable` or `handoff`.
     var mark: String?
+    var browser: Browser = .wisp
+    /// The active tab of its window (user tabs only).
+    var active: Bool? = nil
+
+    /// The `chrome.tabs` id for a user tab.
+    var extensionTabId: Int? { browser == .user ? Int(id) : nil }
 
     var json: JSON {
         [String: JSON].compact([("id", .string(id)), ("title", .string(title)), ("url", .string(url)), ("type", .string(type)),
-                                ("mark", mark.map { .string($0) })])
+                                ("mark", mark.map { .string($0) }), ("browser", .string(browser.rawValue)), ("active", active.map { .bool($0) })])
     }
 }
 
@@ -139,6 +148,8 @@ final class ChromeBackend {
     }
     private var tabs: [String: ChromeTab] = [:]
     private var host: String?
+    /// Ids of the user's tabs (through the extension) seen by the last `listTabs`; they are `chrome.tabs` ids.
+    private var userTabIds = Set<String>()
     /// Tabs created through Wisp (`newTab`, `launch(url:)`) and their marks for the current turn.
     private(set) var agentTabs: [String: Mark] = [:]
     private var appCache: NSRunningApplication?
@@ -210,20 +221,66 @@ final class ChromeBackend {
 
     func version() async throws -> JSON { try await http("/json/version") }
 
+    /// Tabs of the user's browser (through the extension, listed first: the active tab of the focused window, then
+    /// the rest) followed by the Wisp Chrome's tabs. With the extension connected, `active` therefore means the tab
+    /// the user is looking at.
     func listTabs() async throws -> [ChromeTabInfo] {
-        let j = try await http("/json/list")
-        let list = (j.array ?? []).compactMap { t -> ChromeTabInfo? in
-            guard let id = t["id"].string else { return nil }
-            return ChromeTabInfo(id: id, title: t["title"].string ?? "", url: t["url"].string ?? "", wsURL: t["webSocketDebuggerUrl"].string,
-                                 type: t["type"].string ?? "", mark: agentTabs[id]?.label)
-        }.filter { $0.type == "page" }
+        var list: [ChromeTabInfo] = []
+        var userIds = Set<String>()
+        if ExtensionBridge.shared.isConnected, let r = try? await ExtensionBridge.shared.request("tabs", timeout: 8) {
+            for t in r["tabs"].array ?? [] {
+                guard let id = t["id"].int else { continue }
+                let sid = String(id)
+                userIds.insert(sid)
+                list.append(ChromeTabInfo(id: sid, title: t["title"].string ?? "", url: t["url"].string ?? "", wsURL: nil, type: "page",
+                                          mark: agentTabs[sid]?.label, browser: .user, active: t["active"].bool))
+            }
+        }
+        userTabIds = userIds
+        do {
+            list += try await devToolsTabs()
+        } catch {
+            // No Wisp Chrome running: fine as long as the extension answered.
+            if list.isEmpty { throw error }
+        }
         // Tabs the user closed by hand are gone for good; forget their marks.
         let open = Set(list.map { $0.id })
         agentTabs = agentTabs.filter { open.contains($0.key) }
         return list
     }
 
-    func newTab(url: String?) async throws -> ChromeTabInfo {
+    private func devToolsTabs() async throws -> [ChromeTabInfo] {
+        let j = try await http("/json/list")
+        return (j.array ?? []).compactMap { t -> ChromeTabInfo? in
+            guard let id = t["id"].string else { return nil }
+            return ChromeTabInfo(id: id, title: t["title"].string ?? "", url: t["url"].string ?? "", wsURL: t["webSocketDebuggerUrl"].string,
+                                 type: t["type"].string ?? "", mark: agentTabs[id]?.label)
+        }.filter { $0.type == "page" }
+    }
+
+    private func isUserTab(_ id: String) -> Bool { userTabIds.contains(id) || tabs[id]?.info.browser == .user }
+
+    /// `wisp chrome new example.com` means https; `about:`, `chrome:`, `file:` and friends pass through.
+    static func normalizedURL(_ u: String) -> String {
+        if u.contains("://") || u.hasPrefix("about:") || u.hasPrefix("chrome:") || u.hasPrefix("data:") || u.hasPrefix("javascript:") { return u }
+        return "https://" + u
+    }
+
+    /// Opens a tab: in the user's browser when the extension is connected (or `browser == .user`), else in the
+    /// Wisp Chrome. Either way it is an agent tab for this turn.
+    func newTab(url: String?, browser: ChromeTabInfo.Browser? = nil) async throws -> ChromeTabInfo {
+        let where_ = browser ?? (ExtensionBridge.shared.isConnected ? .user : .wisp)
+        if where_ == .user {
+            var p: [String: JSON] = ["active": true]
+            if let u = url { p["url"] = .string(ChromeBackend.normalizedURL(u)) }
+            let r = try await ExtensionBridge.shared.request("new", .object(p), timeout: 15)
+            guard let id = r["id"].int else { throw WispError(.chromeUnavailable, "the Chrome extension did not create a tab: \(r.stringified())") }
+            let sid = String(id)
+            agentTabs[sid] = Mark.none
+            userTabIds.insert(sid)
+            return ChromeTabInfo(id: sid, title: r["title"].string ?? "", url: r["url"].string ?? url ?? "", wsURL: nil, type: "page",
+                                 mark: Mark.none.label, browser: .user, active: true)
+        }
         let target = url.map { "?" + ($0.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? $0) } ?? ""
         let j = try await http("/json/new" + target, method: "PUT")
         guard let id = j["id"].string else { throw WispError(.chromeUnavailable, "Chrome did not create a tab: \(j.stringified())") }
@@ -232,12 +289,26 @@ final class ChromeBackend {
     }
 
     func closeTab(id: String) async throws {
-        _ = try await http("/json/close/\(id)")
-        tabs.removeValue(forKey: id)?.close()
+        if isUserTab(id), let n = Int(id) {
+            // Forget the transport first: the extension's `tabRemoved` would only close it anyway.
+            tabs.removeValue(forKey: id)?.close()
+            _ = try await ExtensionBridge.shared.request("close", ["tabId": .int(n)], timeout: 10)
+        } else {
+            _ = try await http("/json/close/\(id)")
+            tabs.removeValue(forKey: id)?.close()
+        }
         agentTabs.removeValue(forKey: id)
     }
 
-    func activateTab(id: String) async throws { _ = try await http("/json/activate/\(id)") }
+    /// Makes a tab the active one of its window. `focusWindow` also brings that window (and the browser) forward,
+    /// which only `wisp chrome show` asks for; actions never steal focus.
+    func activateTab(id: String, focusWindow: Bool = false) async throws {
+        if isUserTab(id), let n = Int(id) {
+            _ = try await ExtensionBridge.shared.request("activate", ["tabId": .int(n), "focusWindow": .bool(focusWindow)], timeout: 10)
+            return
+        }
+        _ = try await http("/json/activate/\(id)")
+    }
 
     /// Registers tabs Chrome itself opened at launch as agent tabs.
     func registerAgentTabs(_ ids: [String]) { for id in ids where agentTabs[id] == nil { agentTabs[id] = Mark.none } }
@@ -251,9 +322,21 @@ final class ChromeBackend {
         let scratch = agentTabs.filter { $0.value == Mark.none }.map { $0.key }
         agentTabs.removeAll()
         for id in scratch {
-            _ = try? await http("/json/close/\(id)")
-            tabs.removeValue(forKey: id)?.close()
+            if isUserTab(id), let n = Int(id) {
+                tabs.removeValue(forKey: id)?.close()
+                _ = try? await ExtensionBridge.shared.request("close", ["tabId": .int(n)], timeout: 10)
+            } else {
+                _ = try? await http("/json/close/\(id)")
+                tabs.removeValue(forKey: id)?.close()
+            }
         }
+        // Let go of the user's remaining tabs: the browser's "Wisp started debugging" bar disappears until the
+        // next turn touches a tab again.
+        for (id, t) in tabs where t.info.browser == .user {
+            tabs.removeValue(forKey: id)
+            t.close()
+        }
+        await ExtensionBridge.shared.detachAll()
     }
 
     /// The Chrome process that owns our debug port (the Wisp instance, never the user's own Chrome).
@@ -287,6 +370,11 @@ final class ChromeBackend {
     func show(tab spec: String?) async throws {
         if let spec = spec {
             let t = try await tab(spec)
+            if t.info.browser == .user {
+                // The user's own browser: switch to the tab and focus its window; nothing to unhide.
+                try await activateTab(id: t.id, focusWindow: true)
+                return
+            }
             try await activateTab(id: t.id)
         }
         guard let app = runningApp() else { throw WispError(.chromeUnavailable, "the Wisp Chrome process is not running (use `wisp chrome launch`)") }
@@ -327,9 +415,16 @@ final class ChromeBackend {
         }
         guard let i = info else { throw WispError(.tabNotFound, "no Chrome tab matches `\(spec)`", data: .array(list.map { $0.json })) }
         if let t = tabs[i.id], !t.conn.isClosed { t.info = i; return t }
-        guard let ws = i.wsURL, let url = URL(string: ws) else { throw WispError(.chromeUnavailable, "tab \(i.id) has no debugger URL (another client attached?)") }
-        let t = ChromeTab(info: i, conn: CDPConnection(url: url))
-        try await t.conn.connect()
+        let t: ChromeTab
+        if let n = i.extensionTabId {
+            // The extension attaches its debugger on the first command.
+            t = ChromeTab(info: i, conn: ExtensionBridge.shared.transport(for: n))
+        } else {
+            guard let ws = i.wsURL, let url = URL(string: ws) else { throw WispError(.chromeUnavailable, "tab \(i.id) has no debugger URL (another client attached?)") }
+            let c = CDPConnection(url: url)
+            try await c.connect()
+            t = ChromeTab(info: i, conn: c)
+        }
         try await t.enableDomains()
         tabs[i.id] = t
         return t
@@ -391,7 +486,7 @@ final class ChromeBackend {
 /// One attached tab.
 final class ChromeTab {
     var info: ChromeTabInfo
-    let conn: CDPConnection
+    let conn: CDPTransport
     let revisions = RevisionStore()
     var lastScreenshot: ScreenshotResult?
     var instructionsShown = false
@@ -406,7 +501,7 @@ final class ChromeTab {
     private var pendingChooser: (backendNodeId: Int?, mode: String)?
     private var pendingDialog: (type: String, message: String, defaultPrompt: String?)?
 
-    init(info: ChromeTabInfo, conn: CDPConnection) {
+    init(info: ChromeTabInfo, conn: CDPTransport) {
         self.info = info
         self.conn = conn
         conn.onEvent = { [weak self] method, params in

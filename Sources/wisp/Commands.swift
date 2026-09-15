@@ -23,7 +23,9 @@ struct Output {
             }
         case "tabs":
             for t in r.array ?? [] {
-                let tag = t["mark"].string.map { "  [\($0)]" } ?? ""
+                var tags = t["browser"].string == "user" ? ["user" + (t["active"].bool == true ? ", active" : "")] : []
+                if let m = t["mark"].string { tags.append(m) }
+                let tag = tags.isEmpty ? "" : "  [" + tags.joined(separator: "] [") + "]"
                 print("\(t["id"].string ?? "")  \(t["title"].string ?? "")  \(t["url"].string ?? "")\(tag)")
             }
         case "windows":
@@ -119,6 +121,7 @@ enum Commands {
             case "doctor": return doctor(a, out)
             case "daemon": return daemon(a, out)
             case "instructions" where a.rest.first == "list": return instructionsList(out)
+            case "native-host": return NativeHost.run()
             default: break
             }
             let client = WispClient()
@@ -309,7 +312,40 @@ enum Commands {
                 case "tabs": result = try client.call(Proto.Method.chromeTabs); kind = "tabs"
                 case "new":
                     if let u = a.value("url") ?? a.rest.dropFirst().first { p["url"] = .string(u) }
+                    if let b = a.value("browser") {
+                        guard b == "user" || b == "wisp" else { throw WispError(.invalidParams, "--browser user|wisp") }
+                        p["browser"] = .string(b)
+                    }
                     result = try client.call(Proto.Method.chromeTabNew, p, timeout: 60)
+                case "extension":
+                    let verb = a.rest.dropFirst().first ?? "status"
+                    switch verb {
+                    case "install":
+                        let r = try ChromeExtensionSetup.install(browsers: a.values("browser"), open: !a.flag("no-open"))
+                        if out.json { print(r.stringified(pretty: true)); return 0 }
+                        print("extension copied to \(r["dir"].string ?? "")")
+                        for h in r["hosts"].array ?? [] { print("native messaging host registered for \(h["browser"].string ?? ""): \(h["path"].string ?? "")") }
+                        let first = (r["hosts"].array ?? []).first?["browser"].string ?? "the browser"
+                        print("""
+
+                        Next, in \(first)\(r["opened"].bool == true ? " (chrome://extensions was opened for you)" : ": open chrome://extensions"), turn on Developer mode, click "Load unpacked" and choose:
+                          \(r["dir"].string ?? "")
+                        The Wisp toolbar icon loses its red "!" once it reaches wispd; `wisp chrome extension status` checks the same.
+                        """)
+                        return 0
+                    case "status":
+                        let r = ChromeExtensionSetup.status(client: client)
+                        if out.json { print(r.stringified(pretty: true)); return 0 }
+                        print(ChromeExtensionSetup.describe(r))
+                        return 0
+                    case "path":
+                        let installed = ChromeExtension.installDir
+                        let dir = FileManager.default.fileExists(atPath: installed.appendingPathComponent("manifest.json").path) ? installed : ChromeExtension.bundledDir()
+                        guard let d = dir else { throw WispError(.internalError, "the extension is neither installed nor bundled with this build") }
+                        print(d.path)
+                        return 0
+                    default: throw WispError(.invalidParams, "chrome extension install [--browser chrome|brave|edge|chromium|arc|vivaldi|all] [--no-open] | status | path")
+                    }
                 case "goto":
                     guard let u = a.value("url") ?? a.rest.dropFirst().first else { throw WispError(.invalidParams, "chrome goto needs a URL") }
                     p["url"] = .string(u)
@@ -358,7 +394,7 @@ enum Commands {
                 case "hide":
                     result = try client.call(Proto.Method.chromeHide)
                     if !out.json { print("Chrome hidden"); return 0 }
-                default: throw WispError(.invalidParams, "chrome status|launch|tabs|new|goto|eval|close|back|forward|reload|upload|dialog|mark|show|hide")
+                default: throw WispError(.invalidParams, "chrome status|launch|tabs|new|goto|eval|close|back|forward|reload|upload|dialog|mark|show|hide|extension")
                 }
             case "log":
                 result = try client.call(Proto.Method.daemonLog, ["lines": .int(a.int("lines") ?? 60)])
@@ -504,8 +540,10 @@ enum Commands {
       Options: --space window|screenshot|screen, --no-activate, --hid, --no-cursor, plus state flags
 
     Chrome over DevTools
-      wisp chrome launch [--visible] [--port 9222] [--profile DIR] [URL]   hidden in the background unless --visible
-      wisp chrome tabs | new [URL] | close --tab T              tabs shows [agent]/[deliverable]/[handoff] tags
+      wisp chrome extension install | status | path             drive your own Chrome: installs the Wisp extension + native host
+      wisp chrome launch [--visible] [--port 9222] [--profile DIR] [URL]   separate Wisp Chrome, hidden unless --visible
+      wisp chrome tabs | new [URL] [--browser user|wisp] | close --tab T   tabs shows [user]/[agent]/[deliverable]/[handoff] tags;
+                                                                 with the extension connected, new opens in your browser and --tab active is your active tab
       wisp chrome goto --tab T URL | back | forward | reload    wisp chrome eval --tab T "document.title"
       wisp chrome upload --tab T [--el N] /abs/file ...         fill a file input (click it first, or pass --el)
       wisp chrome dialog --tab T accept|dismiss [--text S]      answer an alert/confirm/prompt reported by state

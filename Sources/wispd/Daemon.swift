@@ -328,7 +328,8 @@ actor Daemon {
         case Proto.Method.chromeStatus:
             let v = try? await chrome.version()
             let tabs = (try? await chrome.listTabs()) ?? []
-            return ["result": ["reachable": .bool(v != nil), "port": .int(chrome.port), "version": v ?? .null, "tabs": .array(tabs.map { $0.json })]]
+            return ["result": ["reachable": .bool(v != nil), "port": .int(chrome.port), "version": v ?? .null, "tabs": .array(tabs.map { $0.json }),
+                               "extension": ExtensionBridge.shared.info]]
         case Proto.Method.chromeLaunch:
             let requested = params["port"].int ?? policy.chromePort
             let profile = params["profile"].string.map { URL(fileURLWithPath: $0) } ?? WispPaths.chromeProfileDir
@@ -344,7 +345,7 @@ actor Daemon {
             return ["result": .array(try await chrome.listTabs().map { $0.json })]
         case Proto.Method.chromeTabNew:
             if let u = params["url"].string { try checkBlockedURL(u) }
-            let t = try await chrome.newTab(url: params["url"].string)
+            let t = try await chrome.newTab(url: params["url"].string, browser: params["browser"].string.flatMap { ChromeTabInfo.Browser(rawValue: $0) })
             if params["url"].string != nil {
                 if let tab = try? await chrome.tab(t.id) { await tab.waitForQuiet(min: 0.3, quiet: policy.settleQuiet, max: policy.settleMax) }
             }
@@ -1186,8 +1187,9 @@ actor Daemon {
             throw WispError(.blockedURL, "\(host) is blocked by policy; the tab is on that host")
         }
         let cursor = await MainActor.run { CursorOverlay.shared }
-        // A hidden Chrome has nothing on screen to point at; CDP input works regardless.
-        let useCursor = policy.cursorEnabled && (params["cursor"].bool ?? true) && !chrome.isHidden
+        // A hidden Wisp Chrome has nothing on screen to point at; CDP input works regardless. The user's own browser
+        // (extension tabs) is on screen, so the cursor shows there.
+        let useCursor = policy.cursorEnabled && (params["cursor"].bool ?? true) && !(t.info.browser == .wisp && chrome.isHidden)
         let space = params["space"].string
 
         func viewportPoint(_ at: (Double, Double)) -> CGPoint {

@@ -8,7 +8,8 @@
 
 Wisp is a computer-use toolkit for macOS: a daemon (`wispd`) that reads app windows as an indexed accessibility
 tree and performs UI actions with an animated agent cursor, plus a CLI (`wisp`) and an MCP server (`wisp mcp`)
-that any agent (Claude Code, Codex, scripts) can call. Chrome tabs can also be driven over the DevTools Protocol.
+that any agent (Claude Code, Codex, scripts) can call. Chrome tabs are driven over the DevTools Protocol, in your
+own Chrome through the Wisp extension or in a separate hidden instance.
 
 It is a from-scratch implementation of the ideas documented in [DESIGN.md](DESIGN.md) (how the ChatGPT/Codex
 desktop app's Computer Use works): indexed AX trees with diffs, window-targeted synthesized input that does not
@@ -121,22 +122,34 @@ EOF
 wisp end --app Safari
 ```
 
-Chrome over DevTools (dedicated profile, no impact on your main Chrome windows):
+Chrome tabs are driven over the DevTools Protocol, in one of two places:
+
+- **Your own Chrome, through the Wisp extension** (the way the Codex desktop app works). `wisp chrome extension
+  install` copies the extension to `~/Library/Application Support/Wisp/chrome-extension` and registers its native
+  messaging host for Chrome (and Brave, Edge, Chromium, Arc or Vivaldi when present); load that folder once on
+  `chrome://extensions` (Developer mode, *Load unpacked*). From then on `wisp chrome tabs` lists your tabs first
+  (tagged `[user]`), `--tab active` is the tab you are looking at, and `wisp chrome new URL` opens the page in your
+  browser. Wisp attaches Chrome's debugger to a tab only while it works in it and lets go at `wisp end`.
+- **A separate Wisp Chrome** with its own profile and debug port (`wisp chrome launch`), hidden in the background
+  so your windows are untouched. Used automatically when no extension is connected, or on request with
+  `wisp chrome new URL --browser wisp`.
 
 ```bash
-wisp chrome launch                         # Chrome with --remote-debugging-port (first free port from 9222) and its own profile,
-                                           # hidden in the background (--visible shows it; `wisp chrome show`/`hide` later)
-wisp chrome new https://example.com        # -> tab id
-wisp state --tab <id>; wisp click --tab <id> --el 5; wisp chrome eval --tab <id> "document.title"
+wisp chrome extension install              # extension + native messaging host; then load it once on chrome://extensions
+wisp chrome extension status               # what is installed, and whether the extension is connected to wispd
+wisp chrome tabs                           # [user, active] your active tab, [user] the rest, then Wisp Chrome tabs
+wisp chrome new https://example.com        # -> tab id (in your browser when the extension is connected)
+wisp state --tab active; wisp click --tab <id> --el 5; wisp chrome eval --tab <id> "document.title"
 wisp chrome upload --tab <id> [--el N] /abs/file.pdf   # fill a file input without a picker
 wisp chrome dialog --tab <id> accept|dismiss [--text S] # answer an alert/confirm/prompt (state reports it as open)
 wisp chrome mark --tab <id> deliverable|handoff        # keep a tab past `wisp end` (unmarked agent tabs are scratch)
+wisp chrome launch                         # the separate Wisp Chrome: --remote-debugging-port (first free port from 9222),
+                                           # own profile, hidden (--visible shows it; `wisp chrome show`/`hide` later)
 ```
 
-The chosen port is remembered in `~/Library/Application Support/Wisp/chrome.json`; `wisp chrome launch` reuses a
-running Wisp Chrome instead of starting another.
-
-Your existing Chrome windows can be controlled through accessibility instead: `wisp state --app "Google Chrome"`.
+The Wisp Chrome's port is remembered in `~/Library/Application Support/Wisp/chrome.json`; `wisp chrome launch`
+reuses a running instance instead of starting another. Any Chrome window can also be controlled through
+accessibility like a native app: `wisp state --app "Google Chrome"`.
 
 The first `state` of an app starts with `<app_specific_instructions>`: built-in guidance for that app (Safari, Mail,
 Finder, Slack, Chrome tabs, ...) plus a browser block for anything that handles `http` URLs; `--instructions` repeats
@@ -153,7 +166,7 @@ Claude Code with `claude mcp add wisp -- wisp mcp`. The tools mirror the command
 | Observe | `wisp_apps`, `wisp_windows`, `wisp_state`, `wisp_screenshot` |
 | Act (each returns the new state diff; all accept `observe`, `space`, `cursor`, `activate`, `hid` and the state options) | `wisp_click`, `wisp_move`, `wisp_mouse_down`, `wisp_mouse_up`, `wisp_type`, `wisp_key`, `wisp_set`, `wisp_scroll`, `wisp_drag`, `wisp_action`, `wisp_select_text`, `wisp_paste`, `wisp_batch` |
 | Apps and sessions | `wisp_launch`, `wisp_activate`, `wisp_end`, `wisp_turn_end`, `wisp_cancel`, `wisp_status` |
-| Chrome over DevTools | `wisp_chrome` (status, launch, tabs, new, goto, eval, close, back, forward, reload, upload, dialog, mark, show, hide) |
+| Chrome over DevTools | `wisp_chrome` (status, extension, launch, tabs, new, goto, eval, close, back, forward, reload, upload, dialog, mark, show, hide) |
 | Configuration and health | `wisp_instructions`, `wisp_policy`, `wisp_approvals`, `wisp_doctor`, `wisp_log` |
 
 The model-facing guide lives in [integrations/claude-plugin/skills/wisp/SKILL.md](integrations/claude-plugin/skills/wisp/SKILL.md).
@@ -196,7 +209,10 @@ The model-facing guide lives in [integrations/claude-plugin/skills/wisp/SKILL.md
   hosts (subdomains included, punycode for internationalized names) and refuses actions inside a native window
   whose web content shows one of them.
 - **Chrome:** `Accessibility.getFullAXTree` + `DOMSnapshot.captureSnapshot` rendered by the same engine;
-  `Input.dispatch*` for actions; `Page.captureScreenshot`; `Runtime.evaluate` for `wisp chrome eval`.
+  `Input.dispatch*` for actions; `Page.captureScreenshot`; `Runtime.evaluate` for `wisp chrome eval`. The same
+  commands reach your own browser through the extension: its service worker attaches `chrome.debugger` to the tab
+  and relays commands and events over a native messaging host (`wisp native-host`, a relay to the daemon socket).
+  Synthesized mouse events never reach Chrome's web content, which is why both paths use DevTools.
 
 ### Safety and confirmations
 
@@ -213,7 +229,8 @@ everything else, which needs no confirmation. See
 - Pushing a tag `vX.Y.Z` (or running the *Release* workflow manually) builds universal (Apple silicon + Intel)
   `Wisp.app` and `wisp` CLI binaries on GitHub Actions, signs them with the Developer ID certificate, notarizes and
   staples them, produces
-  `Wisp-X.Y.Z.zip`, `Wisp-X.Y.Z.dmg`, `wisp-cli-X.Y.Z.zip`, `SHA256SUMS.txt` and a Sparkle `appcast.xml`, and
+  `Wisp-X.Y.Z.zip`, `Wisp-X.Y.Z.dmg`, `wisp-cli-X.Y.Z.zip`, `wisp-chrome-extension-X.Y.Z.zip`, `SHA256SUMS.txt` and a
+  Sparkle `appcast.xml`, and
   publishes everything as a GitHub release.
 - The app updates itself with Sparkle (`Check for Updates…` in the menu bar; automatic daily checks). The feed is
   `https://github.com/missuo/wisp/releases/latest/download/appcast.xml`; updates are signed with the EdDSA key whose
@@ -232,12 +249,14 @@ Sources/wispd      daemon: AX snapshot, input synthesis, cursor overlay, settle,
 Sources/wisp       CLI + MCP server
 .claude-plugin/    marketplace.json - serves the plugin below straight from this repository
 integrations/      claude-plugin: the Claude Code plugin (skill for agents + session-cleanup Stop hook)
+                   chrome-extension: the Wisp extension for your own Chrome (service worker + popup)
 scripts/           package.sh (build+sign), bundle.sh (local install), set-version.sh, e2e.sh (TextEdit smoke test)
 .github/workflows  release.yml (sign, notarize, Sparkle appcast, GitHub release)
 assets/            app icon sources and the Sparkle public key
 ```
 
-`swift test` runs the core unit tests; `scripts/e2e.sh` exercises the daemon against TextEdit.
+`swift test` runs the core unit tests; `scripts/e2e.sh` exercises the daemon against TextEdit (`WISP_E2E_CHROME=1`
+adds the Wisp Chrome, `WISP_E2E_EXTENSION=1` the extension in your browser).
 
 ## License
 

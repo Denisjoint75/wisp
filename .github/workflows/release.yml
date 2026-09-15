@@ -94,7 +94,7 @@ jobs:
           xcrun stapler staple "dist/Wisp-$VERSION.dmg"
           # Checksums are taken after stapling, which rewrites the DMG; names are bare so `shasum -c` works from the download folder.
           (cd dist/appcast && shasum -a 256 "Wisp-$VERSION.zip") > dist/SHA256SUMS.txt
-          (cd dist && shasum -a 256 "Wisp-$VERSION.dmg" "wisp-cli-$VERSION.zip") >> dist/SHA256SUMS.txt
+          (cd dist && shasum -a 256 "Wisp-$VERSION.dmg" "wisp-cli-$VERSION.zip" "wisp-chrome-extension-$VERSION.zip") >> dist/SHA256SUMS.txt
 
       - name: Generate Sparkle appcast
         env:
@@ -129,7 +129,7 @@ jobs:
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             git tag -f "$TAG" && git push origin "$TAG" --force
           fi
-          ASSETS=("dist/appcast/Wisp-$VERSION.zip" "dist/Wisp-$VERSION.dmg" "dist/wisp-cli-$VERSION.zip" dist/appcast.xml dist/SHA256SUMS.txt "dist/appcast/Wisp-$VERSION.html")
+          ASSETS=("dist/appcast/Wisp-$VERSION.zip" "dist/Wisp-$VERSION.dmg" "dist/wisp-cli-$VERSION.zip" "dist/wisp-chrome-extension-$VERSION.zip" dist/appcast.xml dist/SHA256SUMS.txt "dist/appcast/Wisp-$VERSION.html")
           # Release body comes from CHANGELOG.md (rendered in the previous step to $RUNNER_TEMP/notes.md).
           NOTES="$RUNNER_TEMP/notes.md"
           [ -s "$NOTES" ] || printf 'Wisp %s\n' "$VERSION" > "$NOTES"

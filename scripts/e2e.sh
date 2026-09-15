@@ -3,6 +3,7 @@
 # trusted terminal). Sections run independently and the script exits non-zero if any section failed:
 #   TextEdit (always, unless WISP_E2E_SKIP_TEXTEDIT=1)
 #   Chrome over DevTools (only with WISP_E2E_CHROME=1; needs Google Chrome; runs hidden in the background)
+#   The Wisp extension in the user's browser (only with WISP_E2E_EXTENSION=1; the extension must be loaded and connected)
 set -uo pipefail
 cd "$(dirname "$0")/.."
 swift build 2>&1 | tail -1
@@ -58,11 +59,37 @@ chrome_section() {
   echo "chrome e2e done"
 }
 
+extension_section() {
+  set -e
+  FIXTURE="file://$PWD/Tests/Fixtures/form.html"
+  echo "--- extension: bridge connected?"
+  $W chrome extension status | tee /dev/stderr | grep -q "^bridge: connected" || { echo "the extension is not connected (wisp chrome extension install, then load it in the browser)"; return 1; }
+  $W chrome tabs | grep -q "\[user" || { echo "no [user] tabs listed"; return 1; }
+  echo "--- extension: new tab opens in the user's browser"
+  TAB=$($W --json chrome new "$FIXTURE" | python3 -c 'import json,sys; j=json.load(sys.stdin); print(j["id"] if j.get("browser")=="user" else "")')
+  [[ -n "$TAB" ]] || { echo "chrome new did not open a user tab"; return 1; }
+  $W chrome tabs | grep -F "$TAB" | grep -q "\[user.*\[agent\]" || { echo "tab is not tagged [user] [agent]"; return 1; }
+  echo "--- extension: read state, fill a field through the debugger"
+  el() { $W state --tab "$TAB" --full --query "$1" | grep -v ' label ' | sed -n 's/^ *\[\([0-9]*\)\] .*/\1/p' | head -1; }
+  NAME_EL=$(el "Full name"); [[ -n "$NAME_EL" ]] || { echo "full name field not found"; return 1; }
+  $W set --tab "$TAB" --el "$NAME_EL" "Wisp" --no-observe
+  VALUE=$($W chrome eval --tab "$TAB" "document.querySelector('#fullName').value")
+  echo "fullName: $VALUE"; [[ "$VALUE" == "Wisp" ]] || { echo "value not set"; return 1; }
+  echo "--- extension: wisp end closes the scratch tab and detaches"
+  $W end
+  if $W chrome tabs | grep -qF "$TAB"; then echo "scratch user tab survived wisp end"; return 1; fi
+  $W --json chrome extension status | grep -q '"attachedTabs" : 0' || { echo "still attached after wisp end"; return 1; }
+  echo "extension e2e done"
+}
+
 if [[ "${WISP_E2E_SKIP_TEXTEDIT:-0}" != "1" ]]; then
   if ! ( textedit_section ); then echo "TEXTEDIT SECTION FAILED"; FAILED=1; fi
 fi
 if [[ "${WISP_E2E_CHROME:-0}" == "1" ]]; then
   if ! ( chrome_section ); then echo "CHROME SECTION FAILED"; FAILED=1; fi
+fi
+if [[ "${WISP_E2E_EXTENSION:-0}" == "1" ]]; then
+  if ! ( extension_section ); then echo "EXTENSION SECTION FAILED"; FAILED=1; fi
 fi
 [[ "$FAILED" == 0 ]] && echo "e2e done" || echo "e2e FAILED"
 exit "$FAILED"

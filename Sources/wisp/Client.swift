@@ -6,6 +6,8 @@ final class WispClient {
     private var fd: Int32 = -1
     private var decoder = Framing.Decoder()
     private var nextId = 1
+    private var inbox: [JSON] = []
+    private let writeLock = NSLock()
     let socketPath: String
 
     init(socketPath: String = WispPaths.socketPath) { self.socketPath = socketPath }
@@ -96,7 +98,26 @@ final class WispClient {
         throw WispError(.timeout, "wispd did not answer \(method) within \(Int(timeout))s")
     }
 
+    /// Sends a notification (no id, so no reply). Safe to call from a second thread while `receive` runs.
+    func notify(_ method: String, _ params: JSON) throws {
+        if fd < 0 { try connect() }
+        try writeAll(Framing.encode(JSON.object(["jsonrpc": "2.0", "method": .string(method), "params": params]).data()))
+    }
+
+    /// Waits up to `timeoutMs` for the next frame from the daemon (nil on timeout); throws once the connection closed.
+    func receive(timeoutMs: Int32) throws -> JSON? {
+        if !inbox.isEmpty { return inbox.removeFirst() }
+        var pfd = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+        if poll(&pfd, 1, timeoutMs) == 0 { return nil }
+        var buf = [UInt8](repeating: 0, count: 65536)
+        let n = read(fd, &buf, buf.count)
+        if n <= 0 { throw WispError(.notConnected, "connection to wispd closed") }
+        for frame in try decoder.feed(Data(buf[0..<n])) { inbox.append(try JSON.parse(frame)) }
+        return inbox.isEmpty ? nil : inbox.removeFirst()
+    }
+
     private func writeAll(_ data: Data) throws {
+        writeLock.lock(); defer { writeLock.unlock() }
         try data.withUnsafeBytes { raw in
             var off = 0
             while off < raw.count {

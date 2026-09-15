@@ -855,6 +855,49 @@ Deliberately deferred, with the evidence that informed the decision:
   driving feature and carries privacy weight; it is a separate, opt-in milestone.
 - **Loopback audio recording** (`SKY_ENABLE_AUDIO`) and **record-and-replay** prompt templates: niche, later.
 
+### 2.13 The user's own browser: the Wisp Chrome extension (implemented in 0.2.0)
+
+Why an extension at all: synthesized mouse events posted to Chrome's process (`CGEvent.postToPid`) are dispatched
+by the browser process but never reach the web renderer, which only trusts events that arrived through the HID
+path; every "click" into page content silently did nothing (§1.5, §2.8). Codex therefore drives Chrome through the
+DevTools Protocol, and reaches the user's *own* Chrome with its extension (`hehggadaopoacecdllhhajmbjkdcmajg`,
+`chrome.debugger` + `chrome.runtime.connectNative("com.openai.codexextension")`, host binary "ChatGPT for Chrome"
+under `~/.codex/plugins/cache/openai-bundled/chrome/`). Wisp 0.1 had only the separate DevTools instance; 0.2 adds
+the same extension mechanism.
+
+Pieces (`integrations/chrome-extension`, `Sources/wispd/ExtensionBridge.swift`, `Sources/wisp/NativeHost.swift`,
+`Sources/wisp/ChromeExtensionSetup.swift`, `Sources/WispCore/ChromeExtension.swift`):
+
+- **Extension** (MV3, permissions `debugger`, `tabs`, `nativeMessaging`, `alarms`). The service worker opens a
+  native messaging port to `sb.moe.wisp`, sends `hello`, and answers the daemon's requests: `tabs` (windows and
+  tabs, the last-focused window's active tab first), `cdp` (attach on first use, `chrome.debugger.sendCommand`),
+  `attach`/`detach`/`detachAll`, `activate`, `new`, `close`, `ping`. Debugger events and detaches stream back as
+  `event`/`detached` messages. The manifest pins a `key`, so the id is stable
+  (`onbeniodfnedfepagelnhdlahohkcnll`) for "Load unpacked" installs and a later store listing alike.
+- **Native host** (`wisp native-host`). Chrome starts it from the host manifest written by `wisp chrome extension
+  install` (`~/Library/Application Support/<browser>/NativeMessagingHosts/sb.moe.wisp.json`, `allowed_origins`
+  = the Wisp extension only). It is a relay: it registers on the daemon socket (`bridge.register`, starting `wispd`
+  when needed), forwards extension messages as `bridge.message` notifications and writes the daemon's
+  `bridge.send` notifications back. Chrome's framing (u32 native-endian length + JSON) is the socket framing, so
+  frames pass through unchanged. It exits when either side closes; the extension reconnects with backoff, and an
+  alarm retries every 30 s after the worker was stopped or once the host gets installed.
+- **Bridge** (`ExtensionBridge`, one per daemon). Holds the registered connection, matches `result` messages to
+  pending requests, routes `event`s to the tab's `ExtensionTransport`, and pings every 20 s so Chrome does not stop
+  the idle worker (and with it the host) between turns.
+- **Transport abstraction.** `ChromeTab` speaks to a `CDPTransport`: `CDPConnection` (WebSocket to the Wisp Chrome)
+  or `ExtensionTransport` (a tab id behind the bridge). Everything above the transport, the tree builder, input,
+  file chooser, dialogs, settle, screenshots, is shared, so both paths behave identically.
+- **Backend policy** (`ChromeBackend`). `listTabs` returns user tabs first (ids are `chrome.tabs` ids), so
+  `active` is the user's active tab; `new` opens in the user's browser when the extension is connected unless
+  `--browser wisp`; unmarked agent tabs are closed at turn end in either browser; turn end also detaches from every
+  user tab so Chrome's "Wisp started debugging this browser" bar disappears. The extension activates a tab in its
+  window when it attaches, before screenshots and before input, so the user sees what Wisp does; it never focuses
+  the window (only `wisp chrome show --tab` does) and the real pointer never moves, matching the in-place rule.
+
+Not done, and why: automatic installation. Chrome 137 removed `--load-extension` from branded builds and the
+`chrome://extensions` drop target only accepts a real OS drag (a DevTools-synthesized drop reports "No dragged
+path"), so the user loads the folder once by hand; a Web Store listing would remove that step and keep the id.
+
 ## Appendix A. Evidence index
 
 ```

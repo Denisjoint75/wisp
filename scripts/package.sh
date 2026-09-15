@@ -48,6 +48,10 @@ cp "$PRODUCTS/wispd" "$APP/Contents/MacOS/wispd"
 cp "$PRODUCTS/wisp" "$OUT/wisp"
 cp "$PRODUCTS/wisp" "$APP/Contents/MacOS/wisp"
 echo "architectures: $(lipo -archs "$APP/Contents/MacOS/wispd")"
+# The Chrome extension ships inside the bundle; `wisp chrome extension install` copies it where the browser can
+# load it. A zip of the same folder is published with each release.
+cp -R integrations/chrome-extension "$APP/Contents/Resources/chrome-extension"
+(cd integrations && rm -f "../$OUT/wisp-chrome-extension-$VERSION.zip" && zip -qr -X "../$OUT/wisp-chrome-extension-$VERSION.zip" chrome-extension -x "*/.DS_Store")
 
 # Sparkle.framework from the SwiftPM binary artifact
 SPARKLE_FW=$(find .build/artifacts -type d -name "Sparkle.framework" -path "*macos*" | head -1)
@@ -120,4 +124,4 @@ for xpc in "$FW"/XPCServices/*.xpc; do "${SIGN[@]}" --preserve-metadata=entitlem
 "${SIGN[@]}" --identifier sb.moe.wisp "$APP"
 "${SIGN[@]}" --identifier sb.moe.wisp.cli "$OUT/wisp"
 codesign --verify --deep --strict "$APP"
-echo "packaged $APP and $OUT/wisp (signed with: $IDENTITY)"
+echo "packaged $APP, $OUT/wisp and $OUT/wisp-chrome-extension-$VERSION.zip (signed with: $IDENTITY)"

@@ -2,7 +2,8 @@ import Foundation
 
 /// Length-prefixed framing shared by the daemon socket: `[u32 little-endian length][payload]`.
 public enum Framing {
-    public static let maxFrame = 8 * 1024 * 1024
+    /// Large enough for a DevTools screenshot relayed by the extension bridge (base64 PNG of a Retina viewport).
+    public static let maxFrame = 64 * 1024 * 1024
 
     public static func encode(_ payload: Data) -> Data {
         var out = Data(capacity: payload.count + 4)

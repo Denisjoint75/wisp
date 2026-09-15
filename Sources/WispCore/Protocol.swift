@@ -37,6 +37,11 @@ public enum Proto {
         public static let chromeTabMark = "chrome.tab.mark"
         public static let chromeShow = "chrome.show"
         public static let chromeHide = "chrome.hide"
+        /// Extension bridge (`wisp native-host` <-> wispd): the host registers, relays extension messages as
+        /// `bridge.message` notifications and writes the daemon's `bridge.send` notifications to the extension.
+        public static let bridgeRegister = "bridge.register"
+        public static let bridgeMessage = "bridge.message"
+        public static let bridgeSend = "bridge.send"
         public static let daemonShutdown = "daemon.shutdown"
         public static let daemonLog = "daemon.log"
     }

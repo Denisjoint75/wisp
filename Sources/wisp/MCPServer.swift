@@ -95,8 +95,10 @@ final class MCPServer {
              schema: ["type": "object", "properties": ["command": ["type": "string", "enum": ["list", "clear"]], "app": ["type": "string", "description": "clear: bundle id to revoke (omit to revoke all)."]], "required": ["command"]]),
         Tool(name: "wisp_log", description: "Tail the daemon log (default 60 lines) for troubleshooting.",
              schema: ["type": "object", "properties": ["lines": ["type": "integer"]]]),
-        Tool(name: "wisp_chrome", description: "Chrome DevTools helpers: status, launch (starts Chrome hidden in the background with a debug port and a dedicated profile; visible=true shows it), tabs (with [agent]/[deliverable]/[handoff] marks), new (url), goto (tab,url), eval (tab, expression), close, back, forward, reload, upload (tab, files; el optional: fills the file input you clicked), dialog (tab, accept, text: answers the alert/confirm/prompt that wisp_state reports), mark (tab, mark: deliverable/handoff keep the tab past wisp_end), show (tab optional: bring Chrome forward), hide. Then use `tab` in the other tools.",
-             schema: ["type": "object", "properties": ["command": ["type": "string", "enum": ["status", "launch", "tabs", "new", "goto", "eval", "close", "back", "forward", "reload", "upload", "dialog", "mark", "show", "hide"]],
+        Tool(name: "wisp_chrome", description: "Chrome helpers. With the Wisp Chrome extension connected (status reports `extension.connected`), tabs lists the user's own tabs first (browser=user, the active one first), tab=active is the user\'s active tab and new opens in the user's browser (browser=wisp forces the separate Wisp Chrome). Commands: status, extension (action: install|status|path; install copies the extension and registers the native host, the user then loads it once on chrome://extensions), launch (starts the separate Wisp Chrome hidden in the background with a debug port and a dedicated profile; visible=true shows it), tabs (with [user]/[agent]/[deliverable]/[handoff] marks), new (url, browser), goto (tab,url), eval (tab, expression), close, back, forward, reload, upload (tab, files; el optional: fills the file input you clicked), dialog (tab, accept, text: answers the alert/confirm/prompt that wisp_state reports), mark (tab, mark: deliverable/handoff keep the tab past wisp_end), show (tab optional: bring Chrome forward), hide. Then use `tab` in the other tools.",
+             schema: ["type": "object", "properties": ["command": ["type": "string", "enum": ["status", "extension", "launch", "tabs", "new", "goto", "eval", "close", "back", "forward", "reload", "upload", "dialog", "mark", "show", "hide"]],
+                                                       "action": ["type": "string", "enum": ["install", "status", "path"], "description": "extension: what to do (default status)."],
+                                                       "browser": ["type": "string", "description": "new: user (your browser via the extension) or wisp (the separate Wisp Chrome); extension install: chrome|brave|edge|chromium|arc|vivaldi|all."],
                                                        "tab": ["type": "string"], "url": ["type": "string"], "expression": ["type": "string"], "port": ["type": "integer"], "profile": ["type": "string"],
                                                        "files": ["type": "array", "items": ["type": "string"], "description": "Absolute paths to upload."],
                                                        "el": ["type": "integer", "description": "File input element index for upload (optional after clicking the input)."],
@@ -338,6 +340,18 @@ final class MCPServer {
             if let text = args["text"].string { p["text"] = .string(text) }
             if let m = args["mark"].string { p["mark"] = .string(m) }
             if let v = args["visible"].bool { p["visible"] = .bool(v) }
+            if let b = args["browser"].string, cmd == "new" { p["browser"] = .string(b) }
+            if cmd == "extension" {
+                switch args["action"].string ?? "status" {
+                case "install":
+                    let r = try ChromeExtensionSetup.install(browsers: args["browser"].string.map { [$0] } ?? [], open: true)
+                    return [["type": "text", "text": .string("extension copied to \(r["dir"].string ?? ""); native messaging host registered for \((r["hosts"].array ?? []).compactMap { $0["browser"].string }.joined(separator: ", ")). The user must load it once: chrome://extensions, Developer mode, Load unpacked, choose \(r["dir"].string ?? ""). Then wisp_chrome status reports extension.connected.")]]
+                case "path":
+                    return [["type": "text", "text": .string(ChromeExtension.installDir.path)]]
+                default:
+                    return [["type": "text", "text": .string(ChromeExtensionSetup.describe(ChromeExtensionSetup.status(client: client)))]]
+                }
+            }
             let method: String
             switch cmd {
             case "status": method = Proto.Method.chromeStatus
@@ -360,7 +374,12 @@ final class MCPServer {
             let r = try client.call(method, .object(p), timeout: 120)
             if !r["state"].isNull { return stateContent(r["state"]) }
             if cmd == "tabs" {
-                return [["type": "text", "text": .string((r.array ?? []).map { "\($0["id"].string ?? "")  \($0["title"].string ?? "")  \($0["url"].string ?? "")" + ($0["mark"].string.map { "  [\($0)]" } ?? "") }.joined(separator: "\n"))]]
+                let lines = (r.array ?? []).map { t -> String in
+                    var tags = t["browser"].string == "user" ? ["user" + (t["active"].bool == true ? ", active" : "")] : []
+                    if let m = t["mark"].string { tags.append(m) }
+                    return "\(t["id"].string ?? "")  \(t["title"].string ?? "")  \(t["url"].string ?? "")" + (tags.isEmpty ? "" : "  [" + tags.joined(separator: "] [") + "]")
+                }
+                return [["type": "text", "text": .string(lines.joined(separator: "\n"))]]
             }
             return [["type": "text", "text": .string(r.stringified(pretty: true))]]
         default:

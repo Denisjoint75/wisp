@@ -19,7 +19,8 @@ of the ChatGPT/Codex desktop app's Computer Use (Part 1) and the design this cod
   notifications, app/window resolution, event synthesis (`CGEvent.postToPid`), event tap (Esc = intervention),
   cursor overlay, ScreenCaptureKit screenshots, CDP client for Chrome, unix socket server, menu bar/status UI,
   permissions monitor, Sparkle updater.
-- `Sources/wisp/` - the CLI: argument parsing, socket client (auto-spawns `wispd`), commands, MCP stdio server.
+- `Sources/wisp/` - the CLI: argument parsing, socket client (auto-spawns `wispd`), commands, MCP stdio server,
+  the Chrome native messaging host (`wisp native-host`) and `wisp chrome extension install|status|path`.
 - `Tests/WispCoreTests/` - unit tests for WispCore.
 - `scripts/` - `package.sh` (builds and assembles `Wisp.app` + `wisp`, signs), `bundle.sh` (local install to
   `~/.local/bin`), `set-version.sh` (rewrites `Sources/WispCore/Version.swift`), `e2e.sh` (TextEdit smoke test).
@@ -27,6 +28,11 @@ of the ChatGPT/Codex desktop app's Computer Use (Part 1) and the design this cod
   directory (`.claude-plugin/plugin.json`, `LICENSE`, `README.md`, `hooks/hooks.json`, `skills/wisp/`). The
   plugin is installed as that directory alone, so it must never reference files outside itself.
   `skills/wisp/SKILL.md` teaches an agent how to use the CLI; keep it in sync with the commands.
+- `integrations/chrome-extension/` - the Wisp Chrome extension (MV3 service worker + popup) that lets Wisp drive the
+  user's own browser. `scripts/package.sh` copies it into `Wisp.app/Contents/Resources/chrome-extension` and zips it
+  as a release asset; `scripts/set-version.sh` stamps its `manifest.json` version. The manifest `key` pins the
+  extension id `onbeniodfnedfepagelnhdlahohkcnll` and the native messaging host is `sb.moe.wisp` (both in
+  `Sources/WispCore/ChromeExtension.swift`); never change either, installed host manifests depend on them.
 - `assets/icon/` - icon sources (SVG, 1024 PNG, `Wisp.icon` Icon Composer document); `assets/sparkle-public-key.txt`.
 - `.github/workflows/release.yml` - signed, notarized release pipeline (see below).
 

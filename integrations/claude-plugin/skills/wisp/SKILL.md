@@ -1,6 +1,6 @@
 ---
 name: wisp
-description: Control macOS apps and Chrome tabs with the `wisp` CLI (accessibility tree + synthesized input, DevTools for Chrome). Use when a task needs to read or operate app UI: click, type, set fields, scroll, drag, press keys, take screenshots. Prefer purpose-built APIs/CLIs when they exist; follow the confirmation tiers in references/confirmations.md before risky actions.
+description: Control macOS apps and Chrome tabs with the `wisp` CLI (accessibility tree + synthesized input, DevTools for Chrome, in the user's own browser through the Wisp extension or in a separate instance). Use when a task needs to read or operate app UI: click, type, set fields, scroll, drag, press keys, take screenshots. Prefer purpose-built APIs/CLIs when they exist; follow the confirmation tiers in references/confirmations.md before risky actions.
 ---
 
 # Wisp computer use
@@ -31,8 +31,9 @@ doctor` shows what is still missing. Only continue once `wisp doctor` reports Ac
 ## Workflow
 
 1. Pick the target: `--app <name|bundle id|path>` for native apps (launched automatically, in the background;
-   `wisp launch --app X [--activate]` starts one explicitly), or `--tab <id>` for a Chrome tab started with
-   `wisp chrome launch`.
+   `wisp launch --app X [--activate]` starts one explicitly), or `--tab <id>` for a Chrome tab: the user's own
+   browser when the Wisp extension is connected (`wisp chrome tabs` shows `[user]` tabs), else the separate Wisp
+   Chrome from `wisp chrome launch`. See "Chrome" below.
 2. Read state: `wisp state --app Safari` (full tree on first call, diff afterwards).
 3. Act using indices from the **latest** state: `wisp click --app Safari --el 12`.
 4. Read the diff in the action result, decide the next step. Never reuse an index from an older state.
@@ -108,7 +109,8 @@ Interruptions and reporting
 - When the user asked for a screenshot, include it in the final answer (the returned path, or the image over MCP).
 - Chrome tabs you open are scratch: `wisp end` closes them. If a tab is a deliverable or a hand-off for the user,
   mark it with `wisp chrome mark --tab T deliverable|handoff` so it survives `wisp end`, leave it open and say so
-  (marks reset each turn). Keep the browser in the background unless the user wants to watch.
+  (marks reset each turn). Keep the separate Wisp Chrome in the background unless the user wants to watch; in
+  the user's own browser the tab you work in is the visible one, so say what you are doing there.
 - Run `wisp end --app X` (or `wisp end --tab <id>`) when finished so the cursor and banner go away. In Claude
   Code the plugin's Stop hook ends whatever is left when the turn does.
 
@@ -134,16 +136,28 @@ user; do not retry or look for another way in.
 
 ## Chrome
 
+Two places, same commands. `wisp chrome tabs` tells you which you have:
+
+- Tabs tagged `[user]` are the user's own browser, reached through the Wisp extension; `[user, active]` is the tab
+  they are looking at. Prefer this when it is available: `wisp chrome new URL` opens in their browser, `--tab
+  active` targets their current tab, and they can watch. Wisp attaches Chrome's debugger only while it works in a
+  tab (Chrome shows a "Wisp started debugging this browser" bar) and detaches at `wisp end`.
+- No `[user]` tabs means the extension is not connected. Then `wisp chrome launch` starts a separate, hidden Wisp
+  Chrome with its own profile, and `wisp chrome new URL` opens there. Do not install the extension on your own; if
+  the user wants Wisp in their browser, tell them: `wisp chrome extension install`, then load the printed folder on
+  `chrome://extensions` (Developer mode, Load unpacked).
+
 ```bash
-wisp chrome launch                      # starts Chrome hidden in the background with a debug port and a dedicated profile
-wisp chrome new https://example.com     # returns a tab id
-wisp state --tab <id>
+wisp chrome tabs                        # [user, active] / [user] tabs first, then Wisp Chrome tabs; agent tabs carry [agent]
+wisp chrome new https://example.com     # returns a tab id (user's browser when connected; --browser wisp forces the Wisp Chrome)
+wisp state --tab <id>                   # or --tab active
 wisp click --tab <id> --el 5; wisp set --tab <id> --el 9 "query"; wisp key --tab <id> Return
 wisp chrome eval --tab <id> "document.title"
 wisp chrome upload --tab <id> [--el N] /abs/file.pdf   # fills a file input (click it first, or pass --el); no picker opens
 wisp chrome dialog --tab <id> accept|dismiss [--text S] # answers the alert/confirm/prompt the state reports as open
 wisp chrome show [--tab <id>] | wisp chrome hide       # bring the Wisp Chrome forward for the user, hide it again
 wisp chrome mark --tab <id> deliverable|handoff        # keep the tab past `wisp end`
+wisp chrome launch                      # the separate Wisp Chrome, hidden in the background (only when no [user] tabs)
 ```
 Chrome tabs support the same actions; `set` dispatches proper input/change events, `chrome goto/back/forward/reload` navigate.
 `wisp chrome tabs` tags the tabs you opened `[agent]`, `[deliverable]` or `[handoff]`.

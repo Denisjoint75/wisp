@@ -13,4 +13,14 @@ public enum WispVersion {
     public static let build = "$BUILD"
 }
 EOF
+# The Chrome extension carries the same version (integrations/chrome-extension/manifest.json).
+python3 - "$VERSION" <<'PY2'
+import json, sys
+path = "integrations/chrome-extension/manifest.json"
+m = json.load(open(path))
+m["version"] = sys.argv[1]
+with open(path, "w") as f:
+    json.dump(m, f, indent=2)
+    f.write("\n")
+PY2
 echo "version $VERSION ($BUILD)"

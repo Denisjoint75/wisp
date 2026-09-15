@@ -140,6 +140,16 @@ final class SocketServer {
                 Daemon.shared.cancelNow(reason: .cancelled, message: "cancelled by client")
                 send(Proto.result(id: id, ["ok": true]))
                 return
+            // The extension bridge: relayed messages never wait behind a running action either (a CDP result for
+            // that very action may be among them).
+            case Proto.Method.bridgeRegister:
+                ExtensionBridge.shared.register(self, params: params)
+                send(Proto.result(id: id, ["ok": true, "version": .string(WispVersion.string)]))
+                return
+            case Proto.Method.bridgeMessage:
+                ExtensionBridge.shared.handle(message: params)
+                if !id.isNull { send(Proto.result(id: id, ["ok": true])) }
+                return
             default: break
             }
             Task {
@@ -168,6 +178,7 @@ final class SocketServer {
             if closed { return }
             closed = true
             reader?.cancel()
+            ExtensionBridge.shared.unregister(self)
             onClose?()
         }
     }

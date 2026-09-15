@@ -3,7 +3,25 @@
 All notable changes to Wisp are documented here. The section for each released version is shown in the Sparkle
 update dialog and in the GitHub release. This project follows [Semantic Versioning](https://semver.org).
 
-## [0.1.1] - 2026-09-15
+## [0.2.0] - 2026-09-15
+
+### Added
+- Chrome extension: Wisp can now work in your own Chrome (or Brave, Edge, Chromium, Arc, Vivaldi), the way the
+  Codex desktop app does, instead of only in a separate DevTools instance. `wisp chrome extension install` copies the
+  extension to `~/Library/Application Support/Wisp/chrome-extension` and registers the native messaging host
+  (`wisp native-host`); load the folder once on `chrome://extensions` (Developer mode, Load unpacked). With the
+  extension connected, `wisp chrome tabs` lists your tabs first (tagged `[user]`, the active one `[user, active]`),
+  `--tab active` is the tab you are looking at, and `wisp chrome new URL` opens in your browser (`--browser wisp`
+  keeps using the separate Wisp Chrome). Wisp attaches Chrome's debugger to a tab only while it acts there and
+  detaches at `wisp end`. `wisp chrome extension status` and `wisp chrome status` report the connection; the MCP
+  `wisp_chrome` tool gained the `extension` command and the `browser` option. The extension ships inside `Wisp.app`
+  and as `wisp-chrome-extension-X.Y.Z.zip` with each release.
+
+### Changed
+- The agent cursor is rebuilt to match the Codex cursor: the same arrow shape and glow, spring-driven motion with the
+  scoot animation (rotation and squash along the travel direction) for long moves and an arc for short ones, a tilt
+  and stretch on press, a wobble on arrival, and a blur-and-scale entrance. The old ring pulse on click is gone.
+
 
 ### Added
 - The MCP server now mirrors the CLI one to one. New tools: `wisp_windows`, `wisp_activate`, `wisp_move`,
