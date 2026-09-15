@@ -3,6 +3,17 @@
 All notable changes to Wisp are documented here. The section for each released version is shown in the Sparkle
 update dialog and in the GitHub release. This project follows [Semantic Versioning](https://semver.org).
 
+## [0.1.3] - 2026-09-15
+
+### Fixed
+- Chrome extension: the native messaging host is now registered as a `#!/bin/sh` launcher script
+  (`~/Library/Application Support/Wisp/native-host.sh`, which execs `wisp native-host`) instead of the `wisp` binary
+  itself. Chrome starts hosts with `posix_spawn`, and on some macOS/Chrome combinations (seen with Chrome 152 on
+  macOS 26) a Mach-O started that way dies before it runs, so the extension only ever reported "Native host has
+  exited" and never connected; the same binary exec'd from a shell script works. `wisp chrome extension status`
+  flags manifests from older installs that still point at the binary as stale; re-run `wisp chrome extension
+  install` to fix them.
+
 ## [0.1.2] - 2026-09-15
 
 ### Added
